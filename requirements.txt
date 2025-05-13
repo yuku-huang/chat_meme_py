@@ -1,0 +1,19 @@
+#pip install -r requirements.txt
+# LINE Bot 相關
+line-bot-sdk
+Flask
+
+# 大型語言模型 API
+groq
+
+# 向量與機器學習相關
+sentence-transformers
+faiss-cpu # CPU 版本的 FAISS，如果你的環境有支援 CUDA 的 GPU，可以考慮 faiss-gpu
+numpy
+Pillow # 用於圖片處理，例如在 meme_logic.py 中測試時顯示圖片
+
+# 環境變數管理 (可選，但推薦)
+python-dotenv
+
+# Logging (Python 內建，通常不需要特別加入，但列出以供參考)
+# logging

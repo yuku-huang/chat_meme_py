@@ -1,0 +1,4 @@
+# .\.venv\Scripts\Activate.ps1
+pip install sentence-transformers
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+pip install sentence-transformers faiss-cpu numpy Pillow
