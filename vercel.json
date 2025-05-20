@@ -7,8 +7,27 @@
     ],
     "routes": [
       {
+        "src": "/static/memes/(.*)",
+        "dest": "/memes/$1"
+      },
+      {
         "src": "/(.*)",
         "dest": "line_bot.py"
       }
+    ],
+    "outputDirectory": "build",
+    "exclude": [
+      "**/node_modules/**",
+      "**/.git/**",
+      "**/.venv/**",
+      "**/__pycache__/**",
+      "**/.ipynb_checkpoints/**",
+      "**/*.ipynb",
+      "**/test*.py",
+      "**/enviroment.txt",
+      "**/meme_annotations old.json",
+      "**/meme_logic copy.py",
+      "**/.vscode/**",
+      "**/.env"
     ]
   }
