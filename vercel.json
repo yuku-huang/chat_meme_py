@@ -3,17 +3,9 @@
       {
         "src": "line_bot.py",
         "use": "@vercel/python"
-      },
-      {
-        "src": "memes/**/*",
-        "use": "@vercel/static"
       }
     ],
     "routes": [
-      {
-        "src": "/static/memes/(.*)",
-        "dest": "/memes/$1"
-      },
       {
         "src": "/(.*)",
         "dest": "line_bot.py"

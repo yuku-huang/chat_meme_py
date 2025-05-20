@@ -1,7 +1,7 @@
 # line_bot_app.py
 import os
 import logging
-from flask import Flask, request, abort, send_from_directory
+from flask import Flask, request, abort
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
 from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage, ImageMessage
@@ -20,12 +20,18 @@ LINE_CHANNEL_ACCESS_TOKEN = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN')
 # **重要**：結尾不要加斜線 (/)
 APP_BASE_URL = os.environ.get('APP_BASE_URL')
 
+# *** 新增：雲端梗圖圖片的基礎 URL ***
+# 例如：https://your-cloud-storage-domain.com/memes/
+CLOUD_MEME_BASE_URL = os.environ.get('CLOUD_MEME_BASE_URL')
+
 
 if not LINE_CHANNEL_SECRET or not LINE_CHANNEL_ACCESS_TOKEN:
     logging.error("錯誤：LINE_CHANNEL_SECRET 或 LINE_CHANNEL_ACCESS_TOKEN 未設定！")
     exit()
 if not APP_BASE_URL:
     logging.warning("警告：APP_BASE_URL 未設定。圖片可能無法正確顯示。請設定為你應用程式的公開網址。")
+if not CLOUD_MEME_BASE_URL: # 修改判斷條件
+    logging.warning("警告：CLOUD_MEME_BASE_URL 未設定。圖片可能無法正確顯示。請設定為你雲端儲存的梗圖基礎網址。")
 
 
 # 初始化 Flask 應用
@@ -105,27 +111,25 @@ def handle_text_message(event):
     else: # 兜底，以防萬一
         messages_to_reply.append(TextMessage(text="我好像有點卡住了，稍等一下喔！"))
 
-    # 準備圖片回覆 (如果有的話)
-    if reply_data.get("image_path") and reply_data.get("meme_filename"):
-        # 產生公開的圖片 URL
-        local_image_path = reply_data["image_path"]
+    # *** 修改圖片回覆邏輯：從雲端 URL 獲取圖片 ***
+    if reply_data.get("meme_filename"): # 只要有檔名，就嘗試構建 URL
         # 從 meme_details 獲取 folder
         meme_details = meme_logic.get_meme_details(reply_data["meme_filename"])
         if meme_details and meme_details.get("folder"):
             meme_folder = meme_details.get("folder")
-            # 構建相對於 static/memes 的路徑，並進行 URL 編碼
-            relative_image_path_for_url = f"memes/{quote(meme_folder)}/{quote(reply_data['meme_filename'])}"
-            
-            if APP_BASE_URL:
-                # 確保 APP_BASE_URL 結尾沒有斜線，而路徑開頭有斜線
-                image_url = f"{APP_BASE_URL.rstrip('/')}/static/{relative_image_path_for_url}"
-                app.logger.info(f"準備發送圖片，URL: {image_url}")
+            # 構建雲端圖片 URL
+            # 確保 CLOUD_MEME_BASE_URL 結尾沒有斜線，並且拼接後面的路徑
+            # 例如：https://your-cloud-storage.com/memes/SpongeBob/640.jpg
+            if CLOUD_MEME_BASE_URL:
+                # 確保 CLOUD_MEME_BASE_URL 結尾沒有斜線，而路徑開頭有斜線
+                image_url = f"{CLOUD_MEME_BASE_URL.rstrip('/')}/{quote(meme_folder)}/{quote(reply_data['meme_filename'])}"
+                app.logger.info(f"準備發送圖片，雲端 URL: {image_url}")
                 messages_to_reply.append(ImageMessage(
                     original_content_url=image_url,
                     preview_image_url=image_url
                 ))
             else:
-                app.logger.warning("APP_BASE_URL 未設定，無法產生圖片的公開 URL，將只回覆文字。")
+                app.logger.warning("CLOUD_MEME_BASE_URL 未設定，無法產生圖片的公開 URL，將只回覆文字。")
         else:
             app.logger.warning(f"無法取得梗圖 {reply_data['meme_filename']} 的資料夾資訊，無法產生圖片 URL。")
 
@@ -152,20 +156,20 @@ def handle_text_message(event):
 # 例如： memes_hosted_for_line/SpongeBob/640.jpg
 # 注意：這裡的 'static' 是 URL 的一部分，而 'directory' 是實際的檔案系統路徑
 # 我們讓 Flask 從 'MEME_ROOT_DIR' (例如 ./memes) 提供服務，URL 路徑是 /static/memes/
-@app.route('/static/memes/<path:folder_and_filename>')
-def serve_meme_image(folder_and_filename):
+# @app.route('/static/memes/<path:folder_and_filename>')
+# def serve_meme_image(folder_and_filename):
     # folder_and_filename 會是像 "SpongeBob/640.jpg" 這樣的形式
     # meme_logic.MEME_ROOT_DIR 是梗圖的實際根目錄，例如 "/path/to/your_project/memes"
     # send_from_directory 需要 (目錄, 檔案名稱)
     # 我們需要將 folder_and_filename 分割成目錄部分和檔案名稱部分
     # 但由於 folder_and_filename 本身就代表了相對於 MEME_ROOT_DIR 的路徑，
     # 所以可以直接將 MEME_ROOT_DIR 作為 directory，folder_and_filename 作為 path
-    app.logger.info(f"嘗試提供靜態檔案：從 {meme_logic.MEME_ROOT_DIR} 提供 {folder_and_filename}")
-    try:
-        return send_from_directory(meme_logic.MEME_ROOT_DIR, folder_and_filename)
-    except FileNotFoundError:
-        app.logger.error(f"請求的靜態檔案未找到: {folder_and_filename} 在 {meme_logic.MEME_ROOT_DIR} 中")
-        abort(404)
+    # app.logger.info(f"嘗試提供靜態檔案：從 {meme_logic.MEME_ROOT_DIR} 提供 {folder_and_filename}")
+    # try:
+        # return send_from_directory(meme_logic.MEME_ROOT_DIR, folder_and_filename)
+    # except FileNotFoundError:
+        # app.logger.error(f"請求的靜態檔案未找到: {folder_and_filename} 在 {meme_logic.MEME_ROOT_DIR} 中")
+        # abort(404)
 
 
 if __name__ == "__main__":

@@ -74,7 +74,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ANNOTATION_FILE = os.path.join(BASE_DIR, 'meme_annotations_enriched.json')
 INDEX_FILE = os.path.join(BASE_DIR, 'faiss_index.index')
 MAPPING_FILE = os.path.join(BASE_DIR, 'index_to_filename.json')
-MEME_ROOT_DIR = os.path.join(BASE_DIR, 'memes') # 梗圖圖片的根目錄
+# MEME_ROOT_DIR = os.path.join(BASE_DIR, 'memes') # 梗圖圖片的根目錄 - 不再由此處提供給 LINE
 
 EMBEDDING_MODEL_NAME = 'paraphrase-multilingual-MiniLM-L12-v2'
 GROQ_MODEL_NAME = os.environ.get("GROQ_MODEL_FOR_BOT", "meta-llama/llama-4-scout-17b-16e-instruct") # 從環境變數讀取模型名稱
@@ -423,7 +423,7 @@ def get_meme_details(filename):
 
 def get_meme_image_path(filename, folder):
     """取得梗圖的本地檔案路徑"""
-    return os.path.join(MEME_ROOT_DIR, folder, filename)
+    return os.path.join(BASE_DIR, 'memes', folder, filename)
 
 
 def get_meme_reply(user_input_text):
@@ -519,12 +519,14 @@ def get_meme_reply(user_input_text):
             selected_meme_folder = chosen_meme_info.get('folder') # 從 meme_info 中取得 folder
 
             if selected_meme_folder:
-                meme_local_path = get_meme_image_path(selected_meme_filename, selected_meme_folder)
+                # meme_local_path 不再需要給 line_bot.py, 但如果本地測試需要可以保留計算
+                # meme_local_path = get_meme_image_path(selected_meme_filename, selected_meme_folder)
+                pass # 不再設定 meme_local_path 給 line_bot.py
             else:
                 logger.warning(f"梗圖 '{selected_meme_filename}' 在標註檔中缺少 'folder' 資訊，無法取得圖片路徑。")
-                meme_local_path = None # 確保 image_path 為 None
+                # meme_local_path = None # 確保 image_path 為 None
             
-            return {"text": final_text_response, "image_path": meme_local_path, "meme_filename": selected_meme_filename}
+            return {"text": final_text_response, "image_path": None, "meme_filename": selected_meme_filename}
         else:
             logger.info("本輪所有候選梗圖經驗證後均不適用。")
             if outer_attempts_left == 0: # 如果是最後一輪嘗試，則跳出
@@ -534,7 +536,7 @@ def get_meme_reply(user_input_text):
     # 如果所有輪次都沒有找到合適的梗圖
     logger.info("所有嘗試結束後，仍未找到合適的梗圖。")
     final_text_response = generate_text_only_fallback_response(user_input_text, "試了幾種不同的點子，但好像都沒找到最搭的梗圖耶！")
-    return {"text": final_text_response, "image_path": None, "meme_filename": None}
+    return {"text": final_text_response, "image_path": None, "meme_filename": None} # 確保這裡也回傳 None
 
 
 # 主動載入一次資源，如果此模組被匯入
@@ -576,9 +578,11 @@ if __name__ == "__main__":
                 print(f"梗圖路徑: {reply['image_path']}")
                 if Image:
                     try:
-                        if os.path.exists(reply['image_path']):
+                        if reply['image_path'] and os.path.exists(reply['image_path']):
                             img = Image.open(reply['image_path'])
                             img.show()
+                        elif reply['meme_filename']:
+                            print(f"本地測試提示：雖然 image_path 為 None，但梗圖檔名為 {reply['meme_filename']}。如需本地顯示，請自行處理路徑。")
                         else:
                             print(f"測試警告：圖片路徑不存在 {reply['image_path']}")
                     except Exception as e:
