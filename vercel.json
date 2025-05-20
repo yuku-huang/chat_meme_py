@@ -5,8 +5,8 @@
         "use": "@vercel/python"
       },
       {
-        "src": "memes/**/*",  
-        "use": "@vercel/static" 
+        "src": "memes/**/*",
+        "use": "@vercel/static"
       }
     ],
     "routes": [
@@ -18,19 +18,5 @@
         "src": "/(.*)",
         "dest": "line_bot.py"
       }
-    ],
-    "exclude": [
-      "**/node_modules/**",
-      "**/.git/**",
-      "**/.venv/**",
-      "**/__pycache__/**",
-      "**/.ipynb_checkpoints/**",
-      "**/*.ipynb",
-      "**/test*.py",
-      "**/enviroment.txt",
-      "**/meme_annotations old.json",
-      "**/meme_logic copy.py",
-      "**/.vscode/**",
-      "**/.env"
     ]
   }
