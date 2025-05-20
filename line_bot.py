@@ -10,7 +10,7 @@ from urllib.parse import quote
 import json
 
 # 直接設定環境變數（請替換成您的實際值）
-os.environ['APP_BASE_URL'] = 'https://1ad5-140-115-143-159.ngrok-free.app'  # 例如：https://xxxx-xxx-xxx-xxx-xxx.ngrok.io
+# os.environ['APP_BASE_URL'] = 'https://chat-meme-py.vercel.app'  # 例如：https://xxxx-xxx-xxx-xxx-xxx.ngrok.io
 
 # 從環境變數讀取 LINE Bot 的憑證
 LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
