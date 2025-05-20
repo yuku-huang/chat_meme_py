@@ -3,6 +3,10 @@
       {
         "src": "line_bot.py",
         "use": "@vercel/python"
+      },
+      {
+        "src": "memes/**/*",  
+        "use": "@vercel/static" 
       }
     ],
     "routes": [
@@ -15,7 +19,6 @@
         "dest": "line_bot.py"
       }
     ],
-    "outputDirectory": "build",
     "exclude": [
       "**/node_modules/**",
       "**/.git/**",
