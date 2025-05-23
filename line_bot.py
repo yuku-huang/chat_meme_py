@@ -1,24 +1,4 @@
-# from flask import Flask, request, abort
-# import logging
-
-# app = Flask(__name__)
-# app.logger.setLevel(logging.INFO)
-
-# @app.route("/")
-# def hello():
-#     app.logger.info("Root path was called.")
-#     return "Hello from Flask!"
-
-# @app.route("/callback", methods=['POST'])
-# def callback():
-#     app.logger.info("Callback received.")
-#     # 暫時不處理 LINE 的複雜邏輯
-#     return 'OK_SIMPLE'
-
-# if __name__ == "__main__":
-#     port = int(os.environ.get("PORT", 5001))
-#     app.run(host="0.0.0.0", port=port, debug=False) # 正式部署時 debug=False
-# line_bot_app.py
+# line_bot.py
 import os
 import logging
 from flask import Flask, request, abort
@@ -29,172 +9,206 @@ from linebot.v3.webhooks import MessageEvent, TextMessageContent
 from urllib.parse import quote
 import json
 
-# 直接設定環境變數（請替換成您的實際值）
-# os.environ['APP_BASE_URL'] = 'https://chat-meme-py.vercel.app'  # 例如：https://xxxx-xxx-xxx-xxx-xxx.ngrok.io
-
-# 從環境變數讀取 LINE Bot 的憑證
-LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
-LINE_CHANNEL_ACCESS_TOKEN = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN')
-# 你部署此應用程式的公開網址，用於產生圖片 URL
-# 例如：https://your-app-name.onrender.com 或 ngrok 的 URL
-# **重要**：結尾不要加斜線 (/)
-APP_BASE_URL = os.environ.get('APP_BASE_URL')
-
-# *** 新增：雲端梗圖圖片的基礎 URL ***
-# 例如：https://your-cloud-storage-domain.com/memes/
-CLOUD_MEME_BASE_URL = os.environ.get('CLOUD_MEME_BASE_URL')
-
-
-if not LINE_CHANNEL_SECRET or not LINE_CHANNEL_ACCESS_TOKEN:
-    logging.error("錯誤：LINE_CHANNEL_SECRET 或 LINE_CHANNEL_ACCESS_TOKEN 未設定！")
-    exit()
-if not APP_BASE_URL:
-    logging.warning("警告：APP_BASE_URL 未設定。圖片可能無法正確顯示。請設定為你應用程式的公開網址。")
-if not CLOUD_MEME_BASE_URL: # 修改判斷條件
-    logging.warning("警告：CLOUD_MEME_BASE_URL 未設定。圖片可能無法正確顯示。請設定為你雲端儲存的梗圖基礎網址。")
-
-
-# 初始化 Flask 應用
+# --- 初始化 Flask 應用 ---
+# 確保 app 是全域的，Vercel (Gunicorn) 會尋找名為 'app' 的 WSGI callable
 app = Flask(__name__)
 
-# 設定 LINE Bot
-configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
-handler = WebhookHandler(LINE_CHANNEL_SECRET)
-
-# 引入你的梗圖邏輯
-import meme_logic
-
 # --- 設定 Logger ---
-# Flask 已經有自己的 logger，這裡可以調整層級或格式
-app.logger.setLevel(logging.INFO)
-# 可以將 meme_logic 的 logger 也整合進來或分開處理
-meme_logic_logger = logging.getLogger('meme_logic') # 與 meme_logic.py 中定義的 logger 名稱一致
-meme_logic_logger.setLevel(logging.INFO)
+# Flask 已經有自己的 logger (app.logger)，我們可以使用它
+# 或者，如果你想用 root logger，可以像 meme_logic.py 那樣設定
+# 這裡我們使用 app.logger，並確保在 Vercel 上也能看到日誌
+if __name__ != '__main__': # 當透過 Gunicorn 執行時 (Vercel 環境)
+    gunicorn_logger = logging.getLogger('gunicorn.error')
+    app.logger.handlers = gunicorn_logger.handlers
+    app.logger.setLevel(gunicorn_logger.level)
+else: # 本地執行時
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 
-# 載入梗圖邏輯所需的資源 (應用程式啟動時執行一次)
-# 確保在 meme_logic 中有相應的初始化函式，例如 load_all_resources()
-if not meme_logic.load_all_resources():
-    app.logger.critical("梗圖邏輯資源載入失敗，應用程式可能無法正常運作！")
+app.logger.info("Flask 應用程式開始初始化 (line_bot.py)")
 
-# Webhook 路徑，LINE Platform 會把事件發送到這裡
+# --- 環境變數讀取 ---
+LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
+LINE_CHANNEL_ACCESS_TOKEN = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN')
+APP_BASE_URL = os.environ.get('APP_BASE_URL') # Vercel 通常會自動設定這個為你的部署 URL
+CLOUD_MEME_BASE_URL = os.environ.get('CLOUD_MEME_BASE_URL')
+
+# 檢查必要的環境變數
+missing_vars = []
+if not LINE_CHANNEL_SECRET: missing_vars.append("LINE_CHANNEL_SECRET")
+if not LINE_CHANNEL_ACCESS_TOKEN: missing_vars.append("LINE_CHANNEL_ACCESS_TOKEN")
+# APP_BASE_URL 和 CLOUD_MEME_BASE_URL 在圖片回覆時才重要，但最好也檢查
+if not APP_BASE_URL: app.logger.warning("警告：APP_BASE_URL 環境變數未設定。")
+if not CLOUD_MEME_BASE_URL: app.logger.warning("警告：CLOUD_MEME_BASE_URL 環境變數未設定。圖片可能無法正確顯示。")
+
+if missing_vars:
+    error_message = f"重大錯誤：必要的環境變數未設定：{', '.join(missing_vars)}。應用程式無法啟動。"
+    app.logger.critical(error_message)
+    # 在 Vercel 環境中，直接拋出異常可能會導致部署失敗或服務無法啟動，
+    # 這比靜默失敗更好，因為它能讓你意識到問題。
+    # 但要注意，如果是在 import 時就拋出，可能會導致 issubclass 錯誤。
+    # 更好的方式是在應用程式的某個早期檢查點進行。
+    # 目前，我們先記錄錯誤。如果 Vercel 仍然報 issubclass 錯誤，可能需要調整這裡的處理。
+    # raise RuntimeError(error_message) # 暫時不拋出，以觀察 issubclass 錯誤是否解決
+
+
+# --- 設定 LINE Bot ---
+try:
+    if LINE_CHANNEL_SECRET and LINE_CHANNEL_ACCESS_TOKEN:
+        handler = WebhookHandler(LINE_CHANNEL_SECRET)
+        configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
+        app.logger.info("LINE Bot WebhookHandler 和 Configuration 初始化成功。")
+    else:
+        handler = None
+        configuration = None
+        app.logger.error("LINE Bot 初始化失敗，因為缺少 Channel Secret 或 Access Token。")
+except Exception as e:
+    handler = None
+    configuration = None
+    app.logger.critical(f"LINE Bot 初始化過程中發生嚴重錯誤: {e}", exc_info=True)
+
+
+# --- 引入並初始化梗圖邏輯 ---
+import meme_logic
+resources_loaded = False
+try:
+    app.logger.info("準備呼叫 meme_logic.load_all_resources()...")
+    resources_loaded = meme_logic.load_all_resources() # 呼叫資源載入
+    if resources_loaded:
+        app.logger.info("meme_logic.load_all_resources() 成功完成。")
+    else:
+        app.logger.critical("meme_logic.load_all_resources() 失敗。梗圖邏輯可能無法正常運作。")
+except Exception as e:
+    app.logger.critical(f"呼叫 meme_logic.load_all_resources() 時發生未預期錯誤: {e}", exc_info=True)
+    resources_loaded = False # 確保標記為失敗
+
+# --- Flask 路由 ---
+@app.route("/")
+def home():
+    app.logger.info("根路徑 '/' 被訪問。")
+    if not handler or not configuration:
+        return "LINE Bot 配置錯誤，請檢查環境變數。", 500
+    if not resources_loaded:
+        return "梗圖服務資源載入失敗，請檢查日誌。", 500
+    return "LINE Bot (meme_logic externalized) is running!", 200
+
 @app.route("/callback", methods=['POST'])
 def callback():
-    # 取得 X-Line-Signature header 值，用於驗證請求
-    signature = request.headers['X-Line-Signature']
+    if not handler:
+        app.logger.error("Webhook callback 被呼叫，但 LINE Handler 未初始化。")
+        abort(500) # 內部伺服器錯誤
 
-    # 取得請求主體 (request body) 的文字內容
+    app.logger.info("Webhook callback 收到請求。")
+    signature = request.headers.get('X-Line-Signature')
     body = request.get_data(as_text=True)
-    app.logger.info(f"Request body: {body}")
+    app.logger.debug(f"請求主體: {body[:200]}...") # 只記錄部分 body
 
-    # 解析 JSON 以檢查是否為重複訊息
     try:
-        data = json.loads(body)
-        if 'events' in data and len(data['events']) > 0:
-            event = data['events'][0]
-            # 檢查是否為重複訊息
-            if event.get('deliveryContext', {}).get('isRedelivery', False):
-                app.logger.info("收到重複訊息，忽略處理")
-                return 'OK'
+        # 檢查是否為重複訊息 (如果 LINE SDK v3 有此機制)
+        # 注意：LINE SDK v3 的 MessageEvent 物件本身沒有 isRedelivery 屬性。
+        # 重複訊息的處理通常在更底層或由 LINE Platform 控制。
+        # 如果你需要明確處理，可能需要檢查請求頭中的 'X-Line-Retry-Key' 或其他標識。
+        # 為了簡化，這裡暫不加入明確的 isRedelivery 檢查。
+        # data = json.loads(body)
+        # if 'events' in data and len(data['events']) > 0 and data['events'][0].get('deliveryContext', {}).get('isRedelivery', False):
+        #     app.logger.info("收到重複訊息 (isRedelivery=true)，忽略處理。")
+        #     return 'OK'
+        pass
     except json.JSONDecodeError:
-        app.logger.error("無法解析請求內容為 JSON")
-        abort(400)
+        app.logger.warning("無法解析請求主體為 JSON (用於 isRedelivery 檢查)。繼續處理...")
+        # 即使無法解析，也應該嘗試讓 handler 處理，因為 handler 可能能處理非 JSON 格式或有自己的解析
+        pass
 
-    # 處理 webhook 事件
+
     try:
         handler.handle(body, signature)
     except InvalidSignatureError:
         app.logger.error("簽名驗證失敗。請檢查你的 Channel Secret 是否正確。")
         abort(400)
     except Exception as e:
-        app.logger.error(f"處理 Webhook 時發生錯誤: {e}")
+        app.logger.error(f"處理 Webhook 事件時發生錯誤: {e}", exc_info=True)
         abort(500)
     return 'OK'
 
-# 處理文字訊息事件
 @handler.add(MessageEvent, message=TextMessageContent)
-def handle_text_message(event):
-    user_id = event.source.user_id
+def handle_text_message(event: MessageEvent):
+    user_id = event.source.user_id if event.source else "未知使用者"
     text = event.message.text
     reply_token = event.reply_token
-    app.logger.info(f"收到來自 {user_id} 的訊息: {text}")
+    app.logger.info(f"收到來自 {user_id} 的文字訊息: {text}")
 
-    # 呼叫梗圖邏輯
-    reply_data = meme_logic.get_meme_reply(text)
-    # reply_data 預期格式: {"text": "回覆文字", "image_path": "本地圖片路徑或None", "meme_filename": "梗圖檔名或None"}
+    if not resources_loaded:
+        app.logger.error(f"由於資源載入失敗，無法為 {user_id} 處理訊息 '{text}'。")
+        # 可以選擇回覆一個錯誤訊息給使用者
+        # error_reply = TextMessage(text="抱歉，我目前遇到一些技術問題，暫時無法服務。")
+        # line_bot_api.reply_message(ReplyMessageRequest(reply_token=reply_token, messages=[error_reply]))
+        return # 或者直接不回應
 
-    messages_to_reply = []
+    try:
+        reply_data = meme_logic.get_meme_reply(text)
+        app.logger.info(f"從 meme_logic 獲取的回覆資料: {reply_data}")
 
-    # 準備文字回覆
-    if reply_data.get("text"):
-        messages_to_reply.append(TextMessage(text=reply_data["text"]))
-    else: # 兜底，以防萬一
-        messages_to_reply.append(TextMessage(text="我好像有點卡住了，稍等一下喔！"))
+        messages_to_reply = []
+        if reply_data and reply_data.get("text"):
+            messages_to_reply.append(TextMessage(text=reply_data["text"]))
+        else:
+            app.logger.warning(f"meme_logic 未回傳有效的文字回覆給使用者輸入 '{text}'。使用預設回覆。")
+            messages_to_reply.append(TextMessage(text="嗯...我好像要想一下。"))
 
-    # *** 修改圖片回覆邏輯：從雲端 URL 獲取圖片 ***
-    if reply_data.get("meme_filename"): # 只要有檔名，就嘗試構建 URL
-        # 從 meme_details 獲取 folder
-        meme_details = meme_logic.get_meme_details(reply_data["meme_filename"])
-        if meme_details and meme_details.get("folder"):
-            meme_folder = meme_details.get("folder")
-            # 構建雲端圖片 URL
-            # 確保 CLOUD_MEME_BASE_URL 結尾沒有斜線，並且拼接後面的路徑
-            # 例如：https://your-cloud-storage.com/memes/SpongeBob/640.jpg
+        if reply_data and reply_data.get("meme_filename") and reply_data.get("meme_folder"):
             if CLOUD_MEME_BASE_URL:
-                # 確保 CLOUD_MEME_BASE_URL 結尾沒有斜線，而路徑開頭有斜線
-                image_url = f"{CLOUD_MEME_BASE_URL.rstrip('/')}/{quote(meme_folder)}/{quote(reply_data['meme_filename'])}"
+                # 確保 CLOUD_MEME_BASE_URL 結尾有斜線，或在這裡處理
+                base_url = CLOUD_MEME_BASE_URL.rstrip('/')
+                image_url = f"{base_url}/{quote(reply_data['meme_folder'])}/{quote(reply_data['meme_filename'])}"
                 app.logger.info(f"準備發送圖片，雲端 URL: {image_url}")
                 messages_to_reply.append(ImageMessage(
                     original_content_url=image_url,
-                    preview_image_url=image_url
+                    preview_image_url=image_url # 通常與 original_content_url 相同
                 ))
             else:
                 app.logger.warning("CLOUD_MEME_BASE_URL 未設定，無法產生圖片的公開 URL，將只回覆文字。")
-        else:
-            app.logger.warning(f"無法取得梗圖 {reply_data['meme_filename']} 的資料夾資訊，無法產生圖片 URL。")
+        elif reply_data and reply_data.get("meme_filename") and not reply_data.get("meme_folder"):
+             app.logger.warning(f"找到梗圖檔名 '{reply_data.get('meme_filename')}' 但缺少資料夾資訊，無法產生圖片 URL。")
 
-    # 使用 Messaging API 回覆訊息
-    with ApiClient(configuration) as api_client:
-        line_bot_api = MessagingApi(api_client)
-        try:
-            line_bot_api.reply_message(
-                ReplyMessageRequest(
-                    reply_token=reply_token,
-                    messages=messages_to_reply
-                )
-            )
-            app.logger.info(f"成功回覆訊息給 {user_id}")
-        except Exception as e:
-            app.logger.error(f"回覆訊息時發生錯誤: {e}")
-            # 如果回覆失敗，不要重試，因為回覆令牌可能已經過期
-            # 記錄錯誤並繼續處理下一個請求
+
+        if not messages_to_reply: # 再次檢查，以防萬一
+            app.logger.error("沒有任何訊息可以回覆。這不應該發生。")
             return
 
-# 提供靜態檔案服務 (用於讓 LINE 可以存取梗圖圖片)
-# 假設你的梗圖放在專案根目錄下的 'memes_hosted_for_line' 資料夾
-# 並且該資料夾結構與 MEME_ROOT_DIR 內部一致
-# 例如： memes_hosted_for_line/SpongeBob/640.jpg
-# 注意：這裡的 'static' 是 URL 的一部分，而 'directory' 是實際的檔案系統路徑
-# 我們讓 Flask 從 'MEME_ROOT_DIR' (例如 ./memes) 提供服務，URL 路徑是 /static/memes/
-# @app.route('/static/memes/<path:folder_and_filename>')
-# def serve_meme_image(folder_and_filename):
-    # folder_and_filename 會是像 "SpongeBob/640.jpg" 這樣的形式
-    # meme_logic.MEME_ROOT_DIR 是梗圖的實際根目錄，例如 "/path/to/your_project/memes"
-    # send_from_directory 需要 (目錄, 檔案名稱)
-    # 我們需要將 folder_and_filename 分割成目錄部分和檔案名稱部分
-    # 但由於 folder_and_filename 本身就代表了相對於 MEME_ROOT_DIR 的路徑，
-    # 所以可以直接將 MEME_ROOT_DIR 作為 directory，folder_and_filename 作為 path
-    # app.logger.info(f"嘗試提供靜態檔案：從 {meme_logic.MEME_ROOT_DIR} 提供 {folder_and_filename}")
-    # try:
-        # return send_from_directory(meme_logic.MEME_ROOT_DIR, folder_and_filename)
-    # except FileNotFoundError:
-        # app.logger.error(f"請求的靜態檔案未找到: {folder_and_filename} 在 {meme_logic.MEME_ROOT_DIR} 中")
-        # abort(404)
+        if configuration: # 確保 configuration 已初始化
+            with ApiClient(configuration) as api_client:
+                line_bot_api = MessagingApi(api_client)
+                line_bot_api.reply_message(
+                    ReplyMessageRequest(
+                        reply_token=reply_token,
+                        messages=messages_to_reply
+                    )
+                )
+            app.logger.info(f"成功回覆訊息給 {user_id}。")
+        else:
+            app.logger.error("LINE MessagingApi Configuration 未初始化，無法回覆訊息。")
 
+    except Exception as e:
+        app.logger.error(f"處理文字訊息或回覆時發生錯誤: {e}", exc_info=True)
+        # 這裡可以考慮是否要嘗試回覆一個通用的錯誤訊息給使用者
+        # 但要注意 reply_token 可能已經失效
 
+# 為了讓 Vercel (或 Gunicorn) 能找到 app 物件，它必須在模組的頂層。
+# if __name__ == "__main__": 這部分僅用於本地開發執行。
 if __name__ == "__main__":
-    # 從環境變數取得埠號，預設為 5000 (Render.com 等平台會自動設定 PORT 環境變數)
-    port = int(os.environ.get("PORT", 5001)) # 改用 5001 避免與其他常用服務衝突
-    # 啟動 Flask 應用程式
-    # host='0.0.0.0' 讓它可以從外部網路存取 (在容器或 VM 中很重要)
-    app.run(host="0.0.0.0", port=port, debug=True) # debug=True 在開發時使用，正式部署時應設為 False
+    # 確保本地測試時，必要的環境變數已設定
+    # 例如： export LINE_CHANNEL_SECRET="..."
+    #       export LINE_CHANNEL_ACCESS_TOKEN="..."
+    #       export ANNOTATIONS_JSON_URL="..."
+    #       export GROQ_API_KEY_1="..."
+    #       export MEME_SEARCH_API_URL="..."
+    #       export CLOUD_MEME_BASE_URL="..."
+    
+    app.logger.info("應用程式以本地開發模式啟動。")
+    if not resources_loaded:
+        app.logger.warning("警告：資源未完全載入，本地測試功能可能受限。")
+    if not handler or not configuration:
+        app.logger.warning("警告：LINE Bot 未完全配置，本地測試功能可能受限。")
+
+    port = int(os.environ.get("PORT", 5001))
+    app.run(host="0.0.0.0", port=port, debug=True) # 本地開發時 debug=True
