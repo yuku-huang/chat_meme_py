@@ -1,4 +1,4 @@
-# meme_logic.py，更新，避免呼叫大的函式庫
+# meme_logic.py
 import json
 import os
 import logging
@@ -6,16 +6,17 @@ import re
 import time
 import random
 from typing import Dict, Optional, List
-
-# 新增：用於呼叫外部 API
-import requests # 請確保將 'requests' 加入到你的 requirements.txt
+import requests # 確保 requests 已在 requirements.txt
 
 # --- 初始化 Logger ---
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# 注意：在 Vercel 環境中，logging 的基本設定可能由平台處理，
+# 但為了本地測試和明確性，可以保留或調整。
+if not logger.hasHandlers(): # 避免重複設定 handler
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
 
 # --- API 金鑰管理 (Groq) ---
-# 這部分保持不變，因為 Groq API 本來就是外部呼叫
 import threading
 
 class APIKeyManager:
@@ -66,17 +67,17 @@ class APIKeyManager:
 api_key_manager = APIKeyManager()
 
 # --- 基本設定 ---
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-ANNOTATION_FILE = os.path.join(BASE_DIR, 'meme_annotations_enriched.json')
-# INDEX_FILE 和 MAPPING_FILE 不再由此腳本直接使用，它們將由外部搜尋服務處理
-# EMBEDDING_MODEL_NAME 也不再由此腳本直接使用
+# BASE_DIR 和 ANNOTATION_FILE 的定義方式將改變，因為我們要從 URL 載入
+# ANNOTATION_FILE = os.path.join(BASE_DIR, 'meme_annotations_enriched.json') # 不再這樣使用
 
-GROQ_MODEL_NAME = os.environ.get("GROQ_MODEL_FOR_BOT", "meta-llama/llama-4-scout-17b-16e-instruct")
+GROQ_MODEL_NAME = os.environ.get("GROQ_MODEL_FOR_BOT", "llama3-8b-8192") # 更新為常見模型
 
-# --- 新增：外部梗圖搜尋服務的 URL ---
-# 你需要將 'YOUR_MEME_SEARCH_API_ENDPOINT' 替換成你實際部署的搜尋服務的 URL
+# --- 新增：梗圖註釋檔案的 URL ---
+# 你需要將 'YOUR_ANNOTATIONS_JSON_URL' 替換成你 meme_annotations_enriched.json 檔案的實際公開 URL
+ANNOTATIONS_JSON_URL = os.environ.get('ANNOTATIONS_JSON_URL', 'YOUR_ANNOTATIONS_JSON_URL')
+
 MEME_SEARCH_API_URL = os.environ.get('MEME_SEARCH_API_URL', 'YOUR_MEME_SEARCH_API_ENDPOINT/search')
-MEME_DETAILS_API_URL = os.environ.get('MEME_DETAILS_API_URL', 'YOUR_MEME_SEARCH_API_ENDPOINT/details') # 用於獲取梗圖詳細資訊
+MEME_DETAILS_API_URL = os.environ.get('MEME_DETAILS_API_URL', 'YOUR_MEME_SEARCH_API_ENDPOINT/details')
 
 # --- 常數 ---
 NUM_CANDIDATE_REPLIES = 3
@@ -85,12 +86,10 @@ MAX_OUTER_LOOP_ATTEMPTS = 2
 MIN_RELEVANCE_SCORE_FOR_ACCEPTANCE = 3
 MIN_HUMOR_FIT_SCORE_FOR_ACCEPTANCE = 3
 
-# --- 全域變數，用於快取載入的資源 ---
-all_meme_annotations_cache = None # 仍然快取註釋檔案，假設它不是過大
-# faiss_index_cache 和 embedding_model_cache 已移除
-groq_clients_cache: Dict[str, 'Groq'] = {} # Groq SDK 的型別提示
+# --- 全域變數 ---
+all_meme_annotations_cache = None
+groq_clients_cache: Dict[str, 'Groq'] = {}
 
-# 延遲匯入 Groq，僅在需要時
 Groq = None
 
 def ensure_groq_imported():
@@ -99,15 +98,19 @@ def ensure_groq_imported():
         try:
             from groq import Groq as GroqClient
             Groq = GroqClient
+            logger.info("Groq SDK 成功匯入。")
         except ImportError:
             logger.error("Groq SDK 未安裝。請執行 'pip install groq'")
-            raise
+            raise # 這裡拋出異常，因為 Groq 是核心依賴
 
 def get_groq_client(task_type: str = 'default') -> Optional['Groq']:
     global groq_clients_cache
-    ensure_groq_imported()
-    if Groq is None: return None
+    ensure_groq_imported() # 確保 Groq 已匯入
+    if Groq is None:
+        logger.error("Groq SDK 無法使用。")
+        return None
 
+    # ... (get_groq_client 的其餘部分與之前相同)
     if task_type in groq_clients_cache:
         return groq_clients_cache[task_type]
 
@@ -116,7 +119,7 @@ def get_groq_client(task_type: str = 'default') -> Optional['Groq']:
         if not api_key:
             logger.error(f"無法為任務類型 '{task_type}' 獲取 API 金鑰")
             return None
-        client = Groq(api_key=api_key)
+        client = Groq(api_key=api_key) # 使用 Groq() 而不是 GroqClient()
         groq_clients_cache[task_type] = client
         logger.info(f"為任務類型 '{task_type}' 初始化新的 Groq Client")
         return client
@@ -124,33 +127,53 @@ def get_groq_client(task_type: str = 'default') -> Optional['Groq']:
         logger.error(f"初始化 Groq Client 失敗: {e}")
         return None
 
+
 def load_all_resources():
     global all_meme_annotations_cache
 
-    if all_meme_annotations_cache: # 只檢查註釋快取
+    if all_meme_annotations_cache:
         logger.info("梗圖註釋已從快取載入。")
         return True
 
-    logger.info("--- 開始載入資源 (僅註釋檔案) ---")
+    logger.info("--- 開始載入資源 (從 URL 載入註釋檔案) ---")
+    
+    if not ANNOTATIONS_JSON_URL or ANNOTATIONS_JSON_URL == 'YOUR_ANNOTATIONS_JSON_URL':
+        logger.error("ANNOTATIONS_JSON_URL 未設定或仍為預設值。無法載入梗圖註釋。")
+        return False
+        
     try:
-        # 載入梗圖註釋，這部分仍然在本地，如果此檔案也過大，也需要考慮外部化
-        # 假設 meme_annotations_enriched.json 包含了足夠的資訊供 validate_meme_choice 和 generate_final_response_text 使用
-        with open(ANNOTATION_FILE, 'r', encoding='utf-8') as f:
-            all_meme_annotations_cache = json.load(f)
-        logger.info(f"成功從 {ANNOTATION_FILE} 載入 {len(all_meme_annotations_cache)} 筆完整標註。")
+        logger.info(f"正在從 URL 下載註釋檔案: {ANNOTATIONS_JSON_URL}")
+        response = requests.get(ANNOTATIONS_JSON_URL, timeout=15) # 設定超時
+        response.raise_for_status() # 檢查 HTTP 錯誤
+        all_meme_annotations_cache = response.json()
+        logger.info(f"成功從 URL 載入 {len(all_meme_annotations_cache)} 筆完整標註。")
 
         # 初始化 Groq client (如果尚未初始化)
-        get_groq_client()
+        # 確保 get_groq_client 在這裡被呼叫，以處理 API 金鑰和 client 初始化
+        if not get_groq_client(): # 嘗試初始化預設的 client
+             logger.error("預設的 Groq Client 初始化失敗。")
+             # 根據你的應用邏輯，這裡可能需要決定是否要讓應用程式啟動失敗
+             # return False # 如果 Groq Client 是絕對必要的
 
-        logger.info("--- 資源載入完成 (僅註釋檔案) ---")
+        logger.info("--- 資源載入完成 ---")
         return True
-    except FileNotFoundError as e:
-        logger.error(f"資源檔案未找到: {e}")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"從 URL 下載註釋檔案時發生網路錯誤: {e}")
     except json.JSONDecodeError as e:
-        logger.error(f"JSON 解析錯誤: {e}")
+        logger.error(f"解析從 URL 下載的 JSON 註釋時發生錯誤: {e}")
     except Exception as e:
         logger.error(f"載入資源時發生未預期錯誤: {e}")
+    
+    all_meme_annotations_cache = None # 確保出錯時快取是 None
     return False
+
+# ... (query_groq_api, generate_multiple_candidate_replies, validate_meme_choice, 
+#      generate_final_response_text, generate_text_only_fallback_response, 
+#      search_memes_via_api, get_meme_details_via_api, get_meme_reply 這些函式保持與上一版相同)
+# 你需要確保這些函式中的 logger.xxx 呼叫是正確的。
+
+# 以下是為了讓程式碼片段完整而複製過來的函式，內容與上一版相同
+# 請檢查並確保它們與你最新的版本一致
 
 def query_groq_api(messages, model_name=GROQ_MODEL_NAME, temperature=0.7, max_tokens=1024, is_json_output=False, task_type: str = 'default'):
     client = get_groq_client(task_type)
@@ -199,16 +222,14 @@ def query_groq_api(messages, model_name=GROQ_MODEL_NAME, temperature=0.7, max_to
                 retry_count += 1
                 if retry_count < max_retries:
                     logger.warning(f"Groq API 錯誤 ({type(e).__name__})，嘗試切換 API 金鑰並重試 ({retry_count}/{max_retries})...")
-                    # 重新獲取 client，這會觸發 APIKeyManager 切換金鑰
-                    client = get_groq_client(task_type)
+                    client = get_groq_client(task_type) # 這會輪換金鑰
                     if not client:
                         logger.error("無法獲取新的 Groq Client 進行重試。")
-                        break # 中斷重試
-                    time.sleep(2 ** retry_count) # 指數退避
+                        break 
+                    time.sleep(2 ** retry_count) 
                     continue
             logger.error(f"執行 Groq API 查詢時發生非預期的錯誤: {e}")
-            # 對於其他類型的錯誤，可能不需要重試，或者使用不同的重試策略
-            break # 或者根據錯誤類型決定是否重試
+            break 
 
     logger.error(f"Groq API 查詢在 {retry_count} 次嘗試後失敗。最後錯誤: {last_error}")
     if is_json_output:
@@ -217,7 +238,6 @@ def query_groq_api(messages, model_name=GROQ_MODEL_NAME, temperature=0.7, max_to
 
 
 def generate_multiple_candidate_replies(user_text, num_replies=NUM_CANDIDATE_REPLIES):
-    # 此函式邏輯不變，繼續使用 Groq API
     system_prompt_instruction = f"""
 你是一個反應快又幽默的聊天夥伴。針對使用者的輸入，請生成 {num_replies} 個不同的、簡短且風趣的文字回覆。
 每個回覆都應該是針對使用者輸入的一個潛在回應。
@@ -244,11 +264,7 @@ def generate_multiple_candidate_replies(user_text, num_replies=NUM_CANDIDATE_REP
         logger.warning(f"無法從 Groq API 取得有效的候選回覆列表。回應: {response}")
         return []
 
-# 移除 analyze_response_description，因為搜尋描述的生成現在由 generate_multiple_candidate_replies 隱含處理
-# 或者，如果外部 API 需要一個明確的 "search_description"，則保留此函式或類似函式
-
 def validate_meme_choice(user_text, meme_info):
-    # 此函式邏輯不變，繼續使用 Groq API
     system_prompt_instruction = """
 You are a meme quality control expert and humor evaluator. Your task is to critically and honestly assess whether a retrieved meme is truly excellent, humorous, and highly suitable for responding to the user's statement.
 Pay special attention to whether the meme's concept aligns with the context of the user's conversation, ensuring the dialogue is coherent and not disjointed.
@@ -284,12 +300,10 @@ Based on all the above information, please output your evaluation report in JSON
 
     if validation_result and not validation_result.get("error"):
         logger.info(f"Groq API evaluation result: {validation_result}")
-        # 確保所有必要欄位存在
         if all(k in validation_result for k in ["relevance_score", "humor_fit_score", "is_suitable", "justification"]):
             return validation_result
         else:
             logger.warning(f"驗證結果 JSON 格式不完整: {validation_result}")
-            # 提供一個預設的失敗結果
             return {
                 "relevance_score": 1, "humor_fit_score": 1, 
                 "is_suitable": "No", "justification": "AI validation response format error.",
@@ -301,7 +315,6 @@ Based on all the above information, please output your evaluation report in JSON
 
 
 def generate_final_response_text(user_text, meme_info):
-    # 此函式邏輯不變，繼續使用 Groq API
     meme_filename = meme_info.get('filename', '未知檔案')
     meme_description = meme_info.get('meme_description', '（無描述）')
     core_meaning = meme_info.get('core_meaning_sentiment', '（無核心意義說明）')
@@ -331,15 +344,14 @@ def generate_final_response_text(user_text, meme_info):
     ]
     logger.info("請求 Groq 生成最終回應文字")
     final_text = query_groq_api(messages_for_groq, model_name=GROQ_MODEL_NAME, task_type='generate_response')
-    if final_text and isinstance(final_text, str): # 確保是字串且非 None
+    if final_text and isinstance(final_text, str): 
         logger.info(f"Groq API 最終回應: {final_text}")
     else:
         logger.warning(f"無法從 Groq API 取得最終回應文字，或回傳非字串。回應: {final_text}")
-        final_text = "呃，我好像詞窮了，不過這個梗圖你看看？" # 預設回覆
+        final_text = "呃，我好像詞窮了，不過這個梗圖你看看？" 
     return final_text
 
 def generate_text_only_fallback_response(user_text, reason_for_no_meme="這次沒找到絕配的梗圖"):
-    # 此函式邏輯不變，繼續使用 Groq API
     system_prompt_instruction = f"""
 你是個幽默風趣、反應敏捷的聊天大師。雖然這次沒有找到適合的梗圖來搭配，但你的任務依然是用純文字給出一個能讓使用者會心一笑的回應。
 請針對使用者的話，給出一個簡短、有趣、像朋友聊天的回覆。
@@ -350,7 +362,7 @@ def generate_text_only_fallback_response(user_text, reason_for_no_meme="這次�
         {"role": "user", "content": user_text}
     ]
     logger.info(f"請求 Groq 生成純文字備案回應 (原因: {reason_for_no_meme})")
-    fallback_text = query_groq_api(messages_for_groq, model_name=GROQ_MODEL_NAME, task_type='generate_replies') # 可以複用 generate_replies 的 task type
+    fallback_text = query_groq_api(messages_for_groq, model_name=GROQ_MODEL_NAME, task_type='generate_replies') 
     if fallback_text and isinstance(fallback_text, str):
         logger.info(f"Groq API 純文字備案回應: {fallback_text}")
     else:
@@ -359,10 +371,6 @@ def generate_text_only_fallback_response(user_text, reason_for_no_meme="這次�
     return fallback_text
 
 def search_memes_via_api(query_text: str, k: int = NUM_MEMES_PER_REPLY_SEARCH) -> List[Dict]:
-    """
-    透過呼叫外部 API 來搜尋相似的梗圖。
-    外部 API 應接收查詢文字和數量 k，回傳梗圖檔案名稱列表。
-    """
     if not MEME_SEARCH_API_URL or MEME_SEARCH_API_URL == 'YOUR_MEME_SEARCH_API_ENDPOINT/search':
         logger.error("MEME_SEARCH_API_URL 未設定或仍為預設值。無法執行外部梗圖搜尋。")
         return []
@@ -371,19 +379,16 @@ def search_memes_via_api(query_text: str, k: int = NUM_MEMES_PER_REPLY_SEARCH) -
     logger.info(f"正在呼叫外部梗圖搜尋 API: {MEME_SEARCH_API_URL}，查詢: {query_text[:50]}..., k={k}")
 
     try:
-        response = requests.post(MEME_SEARCH_API_URL, json=payload, timeout=10) # 設定超時
-        response.raise_for_status()  # 如果 HTTP 狀態碼是 4xx 或 5xx，則拋出異常
-        
-        api_results = response.json() # 預期 API 回傳 JSON 格式，例如: {"results": [{"filename": "meme1.jpg"}, ...]}
+        response = requests.post(MEME_SEARCH_API_URL, json=payload, timeout=10) 
+        response.raise_for_status()  
+        api_results = response.json() 
         
         if "results" in api_results and isinstance(api_results["results"], list):
             logger.info(f"外部 API 成功回傳 {len(api_results['results'])} 個搜尋結果。")
-            # 外部 API 應該直接回傳包含 'filename' 的字典列表
             return api_results["results"] 
         else:
             logger.warning(f"外部 API 回應格式不符預期。回應: {api_results}")
             return []
-
     except requests.exceptions.RequestException as e:
         logger.error(f"呼叫外部梗圖搜尋 API 時發生錯誤: {e}")
         return []
@@ -392,22 +397,18 @@ def search_memes_via_api(query_text: str, k: int = NUM_MEMES_PER_REPLY_SEARCH) -
         return []
 
 def get_meme_details_via_api(filename: str) -> Optional[Dict]:
-    """
-    透過呼叫外部 API 來獲取單個梗圖的詳細資訊。
-    如果 all_meme_annotations_cache 存在且包含資訊，則優先使用快取。
-    """
     global all_meme_annotations_cache
     if all_meme_annotations_cache and filename in all_meme_annotations_cache:
-        # logger.debug(f"從快取獲取梗圖 '{filename}' 的詳細資訊。")
         return all_meme_annotations_cache[filename]
 
-    # 如果快取中沒有，或者快取未載入，則嘗試從 API 獲取
     if not MEME_DETAILS_API_URL or MEME_DETAILS_API_URL == 'YOUR_MEME_SEARCH_API_ENDPOINT/details':
         logger.warning(f"MEME_DETAILS_API_URL 未設定或仍為預設值，且快取中無 '{filename}' 的資訊。")
-        return None
+        # 如果 ANNOTATIONS_JSON_URL 設定了，但 all_meme_annotations_cache 是 None (表示初次載入失敗)
+        # 這裡不應該再嘗試從本地檔案讀取，因為我們的目標是完全移除本地檔案依賴
+        if ANNOTATIONS_JSON_URL and ANNOTATIONS_JSON_URL != 'YOUR_ANNOTATIONS_JSON_URL' and all_meme_annotations_cache is None:
+             logger.warning(f"註釋快取為空，且無法從 MEME_DETAILS_API_URL 獲取 '{filename}'。")
+        return None # 直接回傳 None
 
-    # 這裡假設 API 端點是 /details/{filename} 或透過 query param 傳遞
-    # 為了簡單起見，我們使用 query parameter
     params = {"filename": filename}
     logger.info(f"正在呼叫外部梗圖詳細資訊 API: {MEME_DETAILS_API_URL}，檔案名: {filename}")
     try:
@@ -415,11 +416,15 @@ def get_meme_details_via_api(filename: str) -> Optional[Dict]:
         response.raise_for_status()
         meme_details = response.json()
 
-        if meme_details and isinstance(meme_details, dict): # 確保回傳的是字典
+        if meme_details and isinstance(meme_details, dict): 
             logger.info(f"外部 API 成功回傳梗圖 '{filename}' 的詳細資訊。")
-            # 可以選擇是否更新本地快取
-            # if all_meme_annotations_cache is not None:
-            # all_meme_annotations_cache[filename] = meme_details
+            # 更新快取
+            if all_meme_annotations_cache is not None: # 只有當快取成功初始化過才更新
+                 all_meme_annotations_cache[filename] = meme_details
+            elif ANNOTATIONS_JSON_URL and ANNOTATIONS_JSON_URL != 'YOUR_ANNOTATIONS_JSON_URL':
+                 # 如果快取從未成功載入 (例如 ANNOTATIONS_JSON_URL 首次載入失敗)
+                 # 這裡我們只拿到了單個梗圖的資訊，不適合直接覆蓋 all_meme_annotations_cache
+                 logger.info(f"註釋快取為空，已透過 API 取得 '{filename}' 的單獨資訊。")
             return meme_details
         else:
             logger.warning(f"外部 API 為 '{filename}' 回傳的詳細資訊格式不符預期。回應: {meme_details}")
@@ -433,13 +438,14 @@ def get_meme_details_via_api(filename: str) -> Optional[Dict]:
 
 
 def get_meme_reply(user_input_text: str) -> Dict:
-    if not load_all_resources(): # 確保 Groq client 和註釋已載入
-        return {"text": "抱歉，我內部出了一點小問題，暫時無法提供梗圖服務。", "image_path": None, "meme_filename": None}
+    if not all_meme_annotations_cache: 
+        if not load_all_resources():
+            return {"text": "抱歉，我內部出了一點小問題，暫時無法提供梗圖服務。", "image_path": None, "meme_filename": None, "meme_folder": None}
 
     chosen_meme_info = None
     final_text_response = None
-    # meme_local_path 已不再需要，LINE Bot 會從雲端 URL 取得圖片
     selected_meme_filename = None
+    selected_meme_folder = None # 初始化
     
     outer_attempts_left = MAX_OUTER_LOOP_ATTEMPTS
 
@@ -457,17 +463,15 @@ def get_meme_reply(user_input_text: str) -> Dict:
         all_potential_memes_with_details = []
         for reply_text in candidate_reply_texts:
             logger.info(f"以候選回覆透過 API 搜尋梗圖: {reply_text[:50]}...")
-            # 使用新的 API 搜尋函式
             similar_memes_found = search_memes_via_api(reply_text, k=NUM_MEMES_PER_REPLY_SEARCH)
             
-            for meme_summary in similar_memes_found: # meme_summary 應該是 {'filename': 'name.jpg'}
+            for meme_summary in similar_memes_found: 
                 filename = meme_summary.get('filename')
                 if not filename:
                     logger.warning(f"API 搜尋結果缺少 'filename': {meme_summary}")
                     continue
 
-                # 從快取或 API 獲取詳細資訊
-                meme_details = get_meme_details_via_api(filename)
+                meme_details = get_meme_details_via_api(filename) # 會先查快取
                 if meme_details:
                     full_meme_info = {
                         'filename': filename,
@@ -519,8 +523,9 @@ def get_meme_reply(user_input_text: str) -> Dict:
             chosen_meme_info = best_choice['meme_info']
             final_text_response = generate_final_response_text(user_input_text, chosen_meme_info)
             selected_meme_filename = chosen_meme_info['filename']
-            # folder 資訊已在 chosen_meme_info 中，line_bot.py 會用它來構建雲端 URL
-            return {"text": final_text_response, "image_path": None, "meme_filename": selected_meme_filename, "meme_folder": chosen_meme_info.get('folder')}
+            selected_meme_folder = chosen_meme_info.get('folder') # 從 chosen_meme_info 獲取 folder
+            
+            return {"text": final_text_response, "image_path": None, "meme_filename": selected_meme_filename, "meme_folder": selected_meme_folder}
         else:
             logger.info("本輪所有候選梗圖經驗證後均不適用。")
             if outer_attempts_left == 0: break
@@ -529,20 +534,28 @@ def get_meme_reply(user_input_text: str) -> Dict:
     final_text_response = generate_text_only_fallback_response(user_input_text, "試了幾種不同的點子，但好像都沒找到最搭的梗圖耶！")
     return {"text": final_text_response, "image_path": None, "meme_filename": None, "meme_folder": None}
 
+
 # 主動載入一次資源，如果此模組被匯入
 if __name__ != "__main__":
-    if not load_all_resources():
-        logger.critical("Meme Logic 模組初始化失敗，無法載入必要資源！")
+    if not load_all_resources(): # 這裡會嘗試從 URL 載入
+        logger.critical("Meme Logic 模組初始化失敗，無法載入必要資源！後續功能可能無法正常運作。")
 
 # 可用於直接測試此模組
 if __name__ == "__main__":
-    # 為了測試時顯示圖片 (如果外部服務也回傳本地路徑或雲端 URL)
-    # from PIL import Image # Pillow 不再是此檔案的直接依賴
+    logger.info("開始本地測試 meme_logic.py")
+    # 確保在本地測試時，相關環境變數已設定，特別是 ANNOTATIONS_JSON_URL
+    # 例如： export ANNOTATIONS_JSON_URL="你的JSON檔案的公開網址"
+    #       export MEME_SEARCH_API_URL="你的搜尋服務API網址"
+    #       export MEME_DETAILS_API_URL="你的詳細資訊服務API網址"
+    #       export GROQ_API_KEY="你的Groq API金鑰"
+    #       export CLOUD_MEME_BASE_URL="你的雲端圖片庫基礎網址" (雖然這裡不直接用，但 line_bot 會用)
+
 
     if load_all_resources():
         print("資源載入成功，可以開始測試 get_meme_reply。")
-        print(f"注意：梗圖搜尋將嘗試呼叫 API: {MEME_SEARCH_API_URL}")
-        print(f"注意：梗圖詳細資訊將嘗試從快取或 API: {MEME_DETAILS_API_URL} 獲取")
+        print(f"註釋檔案將從: {ANNOTATIONS_JSON_URL} 載入")
+        print(f"梗圖搜尋將嘗試呼叫 API: {MEME_SEARCH_API_URL}")
+        print(f"梗圖詳細資訊將嘗試從快取或 API: {MEME_DETAILS_API_URL} 獲取")
         
         test_input = input("請輸入測試文字：")
         if test_input:
@@ -552,10 +565,9 @@ if __name__ == "__main__":
             if reply['meme_filename']:
                 print(f"梗圖檔案: {reply['meme_filename']}")
                 print(f"梗圖資料夾: {reply.get('meme_folder')}")
-                # 本地顯示圖片的邏輯需要調整，因為 image_path 現在是 None
-                # 你可能需要根據 meme_filename 和 meme_folder 以及 CLOUD_MEME_BASE_URL (如果 line_bot.py 中設定了) 來手動構建 URL
                 print(f"提示：如需顯示圖片，請自行使用檔名 '{reply['meme_filename']}' 和資料夾 '{reply.get('meme_folder')}' 配合雲端儲存路徑。")
             else:
                 print("無梗圖回覆。")
     else:
-        print("資源載入失敗，無法執行測試。")
+        print("資源載入失敗，無法執行測試。請檢查 ANNOTATIONS_JSON_URL 環境變數是否已設定並可公開存取。")
+
