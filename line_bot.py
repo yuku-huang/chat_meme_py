@@ -1,187 +1,132 @@
-# line_bot.py (最終嘗試版)
-import os
-import logging
-import json # 為了 deliveryContext 檢查 (雖然我們暫時不用)
-from urllib.parse import quote
-
-# 先匯入所有需要的標準函式庫和 Flask
+# line_bot.py (階段六測試：整合 meme_logic 載入和極簡 Handler 處理)
 from flask import Flask, request, abort
+import logging
+import os
 
-# 然後匯入 LINE SDK 元件
+# --- 匯入 LINE SDK 元件 ---
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
-from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage, ImageMessage
+from linebot.v3.messaging import Configuration # 暫時不匯入完整的 MessagingApi 等
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
+# --- 結束匯入 ---
 
-# 最後匯入你自己的模組
+# --- 重新加入 meme_logic 的匯入 ---
 import meme_logic
+# --- 結束 ---
 
-# --- 初始化 Flask 應用 ---
-# 確保 app 是在所有 import 完成後，但在任何其他邏輯之前定義的
 app = Flask(__name__)
 
-# --- 設定 Logger ---
+# 基本的日誌設定
 if __name__ != '__main__':
     gunicorn_logger = logging.getLogger('gunicorn.error')
     if gunicorn_logger.handlers:
         app.logger.handlers = gunicorn_logger.handlers
     app.logger.setLevel(gunicorn_logger.level if gunicorn_logger.handlers else logging.INFO)
 else:
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    logging.basicConfig(level=logging.INFO)
     app.logger.setLevel(logging.INFO)
 
-app.logger.info("最終嘗試版：Flask app 已初始化。")
+app.logger.info("階段六測試：Flask app 已初始化。")
 
-# --- 環境變數讀取 ---
+# --- 初始化 meme_logic 資源 ---
+app.logger.info("階段六測試：準備呼叫 meme_logic.load_all_resources()...")
+resources_loaded_successfully = False
+try:
+    resources_loaded_successfully = meme_logic.load_all_resources()
+    if resources_loaded_successfully:
+        app.logger.info("階段六測試：meme_logic.load_all_resources() 成功完成。")
+    else:
+        app.logger.critical("階段六測試：meme_logic.load_all_resources() 回傳 False - 資源載入失敗。")
+except Exception as e:
+    app.logger.critical(f"階段六測試：呼叫 meme_logic.load_all_resources() 時發生未預期錯誤: {e}", exc_info=True)
+    resources_loaded_successfully = False
+# --- 結束 ---
+
+
+# --- 讀取 LINE 環境變數並初始化 LINE SDK ---
+app.logger.info("階段六測試：準備初始化 LINE SDK...")
 LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN')
-APP_BASE_URL = os.environ.get('APP_BASE_URL')
-CLOUD_MEME_BASE_URL = os.environ.get('CLOUD_MEME_BASE_URL')
 
-# --- 初始化 LINE SDK ---
 handler = None
-configuration = None
-line_sdk_initialized = False
+configuration_obj = None # 保持名稱不同以避免潛在衝突
+line_sdk_initialized_successfully = False
+
+if not LINE_CHANNEL_SECRET:
+    app.logger.error("階段六測試：LINE_CHANNEL_SECRET 環境變數未設定！Handler 無法初始化。")
+if not LINE_CHANNEL_ACCESS_TOKEN: # Configuration 仍然需要它
+    app.logger.error("階段六測試：LINE_CHANNEL_ACCESS_TOKEN 環境變數未設定！Configuration 無法初始化。")
+
 if LINE_CHANNEL_SECRET and LINE_CHANNEL_ACCESS_TOKEN:
     try:
         handler = WebhookHandler(LINE_CHANNEL_SECRET)
-        configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
-        app.logger.info("最終嘗試版：LINE SDK (Handler & Configuration) 初始化成功。")
-        line_sdk_initialized = True
+        configuration_obj = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN) # 建立 Configuration
+        app.logger.info("階段六測試：LINE WebhookHandler 和 Configuration 物件建立成功。")
+        line_sdk_initialized_successfully = True
     except Exception as e:
-        app.logger.critical(f"最終嘗試版：LINE SDK 初始化失敗: {e}", exc_info=True)
+        app.logger.critical(f"階段六測試：LINE SDK 物件建立過程中發生嚴重錯誤: {e}", exc_info=True)
+        line_sdk_initialized_successfully = False
+        handler = None
 else:
-    app.logger.error("最終嘗試版：缺少 LINE Channel Secret 或 Access Token，LINE SDK 未初始化。")
-
-# --- 初始化梗圖邏輯 ---
-resources_loaded = False
-if line_sdk_initialized: # 只有在 LINE SDK 基本設定看似成功後才嘗試載入 meme_logic 資源
-    try:
-        app.logger.info("最終嘗試版：準備呼叫 meme_logic.load_all_resources()...")
-        resources_loaded = meme_logic.load_all_resources()
-        if resources_loaded:
-            app.logger.info("最終嘗試版：meme_logic.load_all_resources() 成功完成。")
-        else:
-            app.logger.critical("最終嘗試版：meme_logic.load_all_resources() 回傳 False。")
-    except Exception as e:
-        app.logger.critical(f"最終嘗試版：呼叫 meme_logic.load_all_resources() 時發生錯誤: {e}", exc_info=True)
-else:
-    app.logger.warning("最終嘗試版：由於 LINE SDK 未初始化，跳過 meme_logic.load_all_resources()。")
+    app.logger.error("階段六測試：由於缺少 LINE 金鑰，LINE SDK 物件未建立。")
+# --- 結束 ---
 
 
-# --- Flask 路由 ---
 @app.route("/")
-def home():
-    app.logger.info("最終嘗試版：根路徑 '/' 被訪問。")
-    if line_sdk_initialized and resources_loaded:
-        return "LINE Bot (final attempt) is running with all resources!", 200
-    elif line_sdk_initialized:
-        return "LINE Bot (final attempt) core SDK ok, but meme_logic resources failed to load.", 500
+def hello():
+    app.logger.info("階段六測試：根路徑 '/' 被訪問。")
+    status_messages = []
+    if resources_loaded_successfully:
+        status_messages.append("meme_logic resources loaded successfully.")
     else:
-        return "LINE Bot (final attempt) core SDK failed to initialize.", 500
+        status_messages.append("meme_logic resources FAILED to load.")
+    
+    if line_sdk_initialized_successfully:
+        status_messages.append("LINE SDK objects created successfully.")
+    else:
+        status_messages.append("LINE SDK objects FAILED to create.")
+        
+    return "Hello from Stage 6 Test! Status: " + " | ".join(status_messages), 200
+
 
 @app.route("/callback", methods=['POST'])
-def callback():
-    if not handler: # 檢查 handler 是否已成功初始化
-        app.logger.error("Webhook callback 被呼叫，但 LINE Handler 未初始化。")
-        abort(500)
+def callback(): 
+    app.logger.info("階段六測試：Webhook callback '/callback' 收到 POST 請求。")
+    
+    if not line_sdk_initialized_successfully or handler is None:
+        app.logger.error("階段六測試：LINE Handler 物件未初始化，無法處理 callback。")
+        abort(500) # Service unavailable
 
-    app.logger.info("Webhook callback 收到請求。")
-    signature = request.headers.get('X-Line-Signature')
+    signature = request.headers.get('X-Line-Signature', '')
     body = request.get_data(as_text=True)
-    # app.logger.debug(f"請求主體: {body[:200]}...") # 開發時可以打開
+    # app.logger.debug(f"階段六測試：Callback body: {body[:200]}...") # 需要時打開
 
-    # 在這裡，你可以先只做最簡單的 handler.handle() 呼叫，
-    # 並在 handle_text_message 中只記錄日誌，不呼叫 meme_logic.get_meme_reply()
-    # 以進一步隔離是 handler.handle() 本身的問題，還是後續訊息處理的問題
     try:
-        app.logger.info("準備呼叫 handler.handle()...")
+        app.logger.info("階段六測試：準備呼叫 handler.handle()...")
         handler.handle(body, signature)
-        app.logger.info("handler.handle() 執行完畢。")
+        app.logger.info("階段六測試：handler.handle() 執行完畢。")
     except InvalidSignatureError:
-        app.logger.error("簽名驗證失敗。")
+        app.logger.error("階段六測試：簽名驗證失敗。")
         abort(400)
     except Exception as e:
-        app.logger.error(f"處理 Webhook 事件時發生錯誤: {e}", exc_info=True)
+        app.logger.error(f"階段六測試：處理 Webhook 時 (handler.handle 期間) 發生未預期錯誤: {e}", exc_info=True)
         abort(500)
-    return 'OK'
+    return 'OK_CALLBACK_STAGE6', 200
 
-if handler: # 確保 handler 存在才註冊
+
+# --- 極簡的 handler 事件處理器 ---
+if handler:
     @handler.add(MessageEvent, message=TextMessageContent)
-    def handle_text_message(event: MessageEvent):
-        user_id = event.source.user_id if event.source else "未知使用者"
-        text = event.message.text
-        reply_token = event.reply_token
-        app.logger.info(f"handle_text_message 收到來自 {user_id} 的文字訊息: '{text}'")
+    def handle_minimal_text_message_stage6(event: MessageEvent):
+        app.logger.info(f"階段六測試：handle_minimal_text_message_stage6 收到訊息 from {event.source.user_id if event.source else 'unknown'}: '{event.message.text}'")
+        app.logger.info(f"階段六測試：Reply token: {event.reply_token}")
+        # 在這個階段，不呼叫 meme_logic.get_meme_reply()
+        # 也不使用 MessagingApi 回覆
+else:
+    app.logger.warning("階段六測試：由於 handler 未初始化，無法新增 minimal_text_message_stage6 訊息處理器。")
+# --- 結束 ---
 
-        if not resources_loaded: # 再次檢查 meme_logic 資源
-            app.logger.error(f"由於資源載入失敗，無法為 {user_id} 處理訊息 '{text}'。")
-            # 可以選擇回覆一個靜態的錯誤訊息
-            # temp_client = ApiClient(configuration) # 假設 configuration 成功初始化
-            # temp_api = MessagingApi(temp_client)
-            # temp_api.reply_message(ReplyMessageRequest(reply_token=reply_token, messages=[TextMessage(text="系統暫時忙碌中，請稍後再試。")]))
-            return
-
-        # --- 恢復完整的訊息處理邏輯 ---
-        try:
-            app.logger.info(f"準備為訊息 '{text}' 呼叫 meme_logic.get_meme_reply...")
-            reply_data = meme_logic.get_meme_reply(text)
-            app.logger.info(f"從 meme_logic 獲取的回覆資料: {reply_data}")
-
-            messages_to_reply = []
-            if reply_data and reply_data.get("text"):
-                messages_to_reply.append(TextMessage(text=reply_data["text"]))
-            else:
-                app.logger.warning(f"meme_logic 未回傳有效的文字回覆給使用者輸入 '{text}'。使用預設回覆。")
-                messages_to_reply.append(TextMessage(text="嗯...這個我得好好想想。"))
-
-            if reply_data and reply_data.get("meme_filename") and reply_data.get("meme_folder"):
-                if CLOUD_MEME_BASE_URL:
-                    base_url = CLOUD_MEME_BASE_URL.rstrip('/')
-                    image_url = f"{base_url}/{quote(reply_data['meme_folder'])}/{quote(reply_data['meme_filename'])}"
-                    app.logger.info(f"準備發送圖片，雲端 URL: {image_url}")
-                    messages_to_reply.append(ImageMessage(
-                        original_content_url=image_url,
-                        preview_image_url=image_url
-                    ))
-                else:
-                    app.logger.warning("CLOUD_MEME_BASE_URL 未設定，無法產生圖片的公開 URL。")
-            elif reply_data and reply_data.get("meme_filename") and not reply_data.get("meme_folder"):
-                 app.logger.warning(f"找到梗圖檔名 '{reply_data.get('meme_filename')}' 但缺少資料夾資訊。")
-            
-            if not messages_to_reply:
-                 app.logger.error("沒有任何訊息可以回覆（在建構訊息列表後）。")
-                 messages_to_reply.append(TextMessage(text="我好像不知道該說什麼了..."))
-
-
-            if configuration: # 確保 configuration 已初始化
-                with ApiClient(configuration) as api_client:
-                    line_bot_api = MessagingApi(api_client)
-                    line_bot_api.reply_message(
-                        ReplyMessageRequest(
-                            reply_token=reply_token,
-                            messages=messages_to_reply
-                        )
-                    )
-                app.logger.info(f"成功回覆訊息給 {user_id}。")
-            else:
-                app.logger.error("LINE MessagingApi Configuration 未初始化，無法回覆訊息。")
-
-        except Exception as e:
-            app.logger.error(f"處理文字訊息或回覆時發生嚴重錯誤: {e}", exc_info=True)
-            # 嘗試回覆一個通用的錯誤訊息給使用者
-            try:
-                if configuration:
-                    with ApiClient(configuration) as api_client:
-                        line_bot_api = MessagingApi(api_client)
-                        line_bot_api.reply_message(
-                            ReplyMessageRequest(
-                                reply_token=reply_token,
-                                messages=[TextMessage(text="哎呀，我好像遇到一點小問題，請稍後再試一次喔！")]
-                            )
-                        )
-            except Exception as e_reply:
-                app.logger
+# (本地開發用的 if __name__ == "__main__": 部分可以保留或註解掉)
 # # line_bot.py
 # import os
 # import logging
