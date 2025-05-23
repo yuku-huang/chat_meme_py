@@ -1,10 +1,9 @@
-# line_bot.py (階段一測試：僅匯入 meme_logic)
+# line_bot.py (階段二測試：呼叫 meme_logic.load_all_resources())
 from flask import Flask
 import logging
 import os
 
-# 僅僅匯入 meme_logic，先不執行任何 meme_logic 的函式
-import meme_logic # <--- 新增這一行
+import meme_logic # 匯入 meme_logic
 
 app = Flask(__name__)
 
@@ -20,25 +19,39 @@ else:
     logging.basicConfig(level=logging.INFO)
     app.logger.setLevel(logging.INFO)
 
-app.logger.info("階段一測試：Flask app 已初始化，meme_logic 已匯入。")
-app.logger.info(f"meme_logic 模組 ANNOTATIONS_JSON_URL (若存在): {getattr(meme_logic, 'ANNOTATIONS_JSON_URL', '未在 meme_logic 中定義或 meme_logic 未完全載入')}")
+app.logger.info("階段二測試：Flask app 已初始化。")
 
+# --- 新增：呼叫 meme_logic.load_all_resources() ---
+app.logger.info("階段二測試：準備呼叫 meme_logic.load_all_resources()...")
+resources_loaded_successfully = False # 先假設失敗
+try:
+    resources_loaded_successfully = meme_logic.load_all_resources()
+    if resources_loaded_successfully:
+        app.logger.info("階段二測試：meme_logic.load_all_resources() 成功完成。")
+    else:
+        app.logger.critical("階段二測試：meme_logic.load_all_resources() 回傳 False - 資源載入失敗。")
+except Exception as e:
+    app.logger.critical(f"階段二測試：呼叫 meme_logic.load_all_resources() 時發生未預期錯誤: {e}", exc_info=True)
+    resources_loaded_successfully = False
+# --- 結束新增 ---
 
 @app.route("/")
 def hello():
-    app.logger.info("階段一測試：根路徑 '/' 被訪問。")
-    # 檢查 meme_logic 是否真的被匯入了
-    if 'meme_logic' in globals() and meme_logic is not None:
-        app.logger.info("meme_logic 模組已成功匯入到全域命名空間。")
+    app.logger.info("階段二測試：根路徑 '/' 被訪問。")
+    if resources_loaded_successfully:
+        return "Hello from Stage 2 Test! meme_logic.load_all_resources() was called and reported success.", 200
     else:
-        app.logger.warning("meme_logic 模組未找到或為 None。")
-    return "Hello from Stage 1 Test! meme_logic imported.", 200
+        return "Hello from Stage 2 Test! meme_logic.load_all_resources() was called but FAILED or an exception occurred.", 500
+
 
 @app.route("/callback", methods=['POST'])
 def callback_stub():
-    app.logger.info("階段一測試：Webhook callback '/callback' 收到 POST 請求。")
-    return 'OK_CALLBACK_STAGE1', 200
-
+    app.logger.info("階段二測試：Webhook callback '/callback' 收到 POST 請求。")
+    if not resources_loaded_successfully:
+        app.logger.error("階段二測試：由於資源載入失敗，callback 無法正常處理。")
+        # 在實際應用中，這裡可能需要回覆一個錯誤訊息給 LINE
+        return 'ERROR_RESOURCES_NOT_LOADED', 503 # Service Unavailable
+    return 'OK_CALLBACK_STAGE2', 200
 # (本地開發用的 if __name__ == "__main__": 部分可以保留或註解掉，Vercel 不會執行它)
 # # line_bot.py
 # import os
