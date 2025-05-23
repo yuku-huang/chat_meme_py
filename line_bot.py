@@ -1,36 +1,45 @@
-# line_bot.py (極簡測試版 - 再次確認這個版本能否正常運作)
+# line_bot.py (階段一測試：僅匯入 meme_logic)
 from flask import Flask
 import logging
 import os
 
+# 僅僅匯入 meme_logic，先不執行任何 meme_logic 的函式
+import meme_logic # <--- 新增這一行
+
 app = Flask(__name__)
 
-# 基本的日誌設定 (與你上次提供的版本相同)
 if __name__ != '__main__':
     gunicorn_logger = logging.getLogger('gunicorn.error')
-    if gunicorn_logger.handlers: # 檢查是否有 handlers
+    if gunicorn_logger.handlers:
         app.logger.handlers = gunicorn_logger.handlers
         app.logger.setLevel(gunicorn_logger.level)
-    else: # 如果 gunicorn logger 沒有 handlers (例如本地執行 flask run)
+    else:
         logging.basicConfig(level=logging.INFO)
         app.logger.setLevel(logging.INFO)
 else:
     logging.basicConfig(level=logging.INFO)
     app.logger.setLevel(logging.INFO)
 
-app.logger.info("極簡版 Flask app 已初始化 (line_bot.py)。")
+app.logger.info("階段一測試：Flask app 已初始化，meme_logic 已匯入。")
+app.logger.info(f"meme_logic 模組 ANNOTATIONS_JSON_URL (若存在): {getattr(meme_logic, 'ANNOTATIONS_JSON_URL', '未在 meme_logic 中定義或 meme_logic 未完全載入')}")
+
 
 @app.route("/")
 def hello():
-    app.logger.info("極簡版根路徑 '/' 被訪問。")
-    return "Hello from Minimal Vercel Flask App! Stage 2 Test.", 200
+    app.logger.info("階段一測試：根路徑 '/' 被訪問。")
+    # 檢查 meme_logic 是否真的被匯入了
+    if 'meme_logic' in globals() and meme_logic is not None:
+        app.logger.info("meme_logic 模組已成功匯入到全域命名空間。")
+    else:
+        app.logger.warning("meme_logic 模組未找到或為 None。")
+    return "Hello from Stage 1 Test! meme_logic imported.", 200
 
 @app.route("/callback", methods=['POST'])
 def callback_stub():
-    app.logger.info("極簡版 Webhook callback '/callback' 收到 POST 請求。")
-    # 在這個極簡版本中，我們不驗證簽名，也不處理 body
-    # 只是為了確認 Vercel 能否正確路由並執行這個函式
-    return 'OK_CALLBACK_STUB', 200
+    app.logger.info("階段一測試：Webhook callback '/callback' 收到 POST 請求。")
+    return 'OK_CALLBACK_STAGE1', 200
+
+# (本地開發用的 if __name__ == "__main__": 部分可以保留或註解掉，Vercel 不會執行它)
 # # line_bot.py
 # import os
 # import logging
