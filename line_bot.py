@@ -1,19 +1,23 @@
-# line_bot.py (階段三測試：初始化 LINE SDK)
-from flask import Flask, request, abort # <--- 新增 request, abort
+# line_bot.py (階段四測試：基本 Flask + LINE SDK 物件建立)
+from flask import Flask, request, abort
 import logging
 import os
 
-import meme_logic
+# --- 匯入 LINE SDK 元件 ---
+from linebot.v3 import WebhookHandler # 只匯入 WebhookHandler
+from linebot.v3.messaging import Configuration # 只匯入 Configuration
+# from linebot.v3.exceptions import InvalidSignatureError # 暫時不用
+# from linebot.v3.messaging import ApiClient, MessagingApi, ReplyMessageRequest, TextMessage, ImageMessage # 暫時不用
+# from linebot.v3.webhooks import MessageEvent, TextMessageContent # 暫時不用
+# --- 結束匯入 ---
 
-# --- 新增：匯入 LINE SDK 元件 ---
-from linebot.v3 import WebhookHandler
-from linebot.v3.exceptions import InvalidSignatureError
-from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage, ImageMessage
-from linebot.v3.webhooks import MessageEvent, TextMessageContent
-# --- 結束新增 ---
+# --- 移除 meme_logic 的匯入 ---
+# import meme_logic # <--- 暫時移除
+# --- 結束移除 ---
 
 app = Flask(__name__)
 
+# 基本的日誌設定
 if __name__ != '__main__':
     gunicorn_logger = logging.getLogger('gunicorn.error')
     if gunicorn_logger.handlers:
@@ -26,112 +30,66 @@ else:
     logging.basicConfig(level=logging.INFO)
     app.logger.setLevel(logging.INFO)
 
-app.logger.info("階段三測試：Flask app 已初始化。")
+app.logger.info("階段四測試：Flask app 已初始化。")
 
-# --- 呼叫 meme_logic.load_all_resources() ---
-app.logger.info("階段三測試：準備呼叫 meme_logic.load_all_resources()...")
-resources_loaded_successfully = False
-try:
-    resources_loaded_successfully = meme_logic.load_all_resources()
-    if resources_loaded_successfully:
-        app.logger.info("階段三測試：meme_logic.load_all_resources() 成功完成。")
-    else:
-        app.logger.critical("階段三測試：meme_logic.load_all_resources() 回傳 False - 資源載入失敗。")
-except Exception as e:
-    app.logger.critical(f"階段三測試：呼叫 meme_logic.load_all_resources() 時發生未預期錯誤: {e}", exc_info=True)
-    resources_loaded_successfully = False
-# --- 結束 ---
-
-# --- 新增：讀取 LINE 環境變數並初始化 LINE SDK ---
-app.logger.info("階段三測試：準備初始化 LINE SDK...")
+# --- 讀取 LINE 環境變數並初始化 LINE SDK ---
+app.logger.info("階段四測試：準備初始化 LINE SDK...")
 LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN')
 
-handler = None
-configuration = None
-line_sdk_initialized_successfully = False
+handler_obj = None # 改名以避免與全域 handler 混淆
+configuration_obj = None # 改名
+line_sdk_objects_initialized_successfully = False
 
 if not LINE_CHANNEL_SECRET:
-    app.logger.error("階段三測試：LINE_CHANNEL_SECRET 環境變數未設定！")
+    app.logger.error("階段四測試：LINE_CHANNEL_SECRET 環境變數未設定！")
 if not LINE_CHANNEL_ACCESS_TOKEN:
-    app.logger.error("階段三測試：LINE_CHANNEL_ACCESS_TOKEN 環境變數未設定！")
+    app.logger.error("階段四測試：LINE_CHANNEL_ACCESS_TOKEN 環境變數未設定！")
 
 if LINE_CHANNEL_SECRET and LINE_CHANNEL_ACCESS_TOKEN:
     try:
-        handler = WebhookHandler(LINE_CHANNEL_SECRET)
-        configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
-        app.logger.info("階段三測試：LINE WebhookHandler 和 Configuration 初始化成功。")
-        line_sdk_initialized_successfully = True
+        handler_obj = WebhookHandler(LINE_CHANNEL_SECRET)
+        configuration_obj = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
+        app.logger.info("階段四測試：LINE WebhookHandler 和 Configuration 物件建立成功。")
+        line_sdk_objects_initialized_successfully = True
     except Exception as e:
-        app.logger.critical(f"階段三測試：LINE SDK 初始化過程中發生嚴重錯誤: {e}", exc_info=True)
-        line_sdk_initialized_successfully = False
+        app.logger.critical(f"階段四測試：LINE SDK 物件建立過程中發生嚴重錯誤: {e}", exc_info=True)
+        line_sdk_objects_initialized_successfully = False
 else:
-    app.logger.error("階段三測試：由於缺少 LINE 金鑰，LINE SDK 未初始化。")
-# --- 結束新增 ---
+    app.logger.error("階段四測試：由於缺少 LINE 金鑰，LINE SDK 物件未建立。")
+# --- 結束 ---
 
 
 @app.route("/")
 def hello():
-    app.logger.info("階段三測試：根路徑 '/' 被訪問。")
+    app.logger.info("階段四測試：根路徑 '/' 被訪問。")
     status_messages = []
-    if resources_loaded_successfully:
-        status_messages.append("meme_logic resources loaded successfully.")
+    if line_sdk_objects_initialized_successfully:
+        status_messages.append("LINE SDK objects created successfully.")
     else:
-        status_messages.append("meme_logic resources FAILED to load.")
-    
-    if line_sdk_initialized_successfully:
-        status_messages.append("LINE SDK initialized successfully.")
-    else:
-        status_messages.append("LINE SDK FAILED to initialize.")
+        status_messages.append("LINE SDK objects FAILED to create.")
         
-    return "Hello from Stage 3 Test! Status: " + " | ".join(status_messages), 200
+    return "Hello from Stage 4 Test! Status: " + " | ".join(status_messages), 200
 
 
+# --- Callback 路由，但 handler 的邏輯先極簡化或移除 ---
 @app.route("/callback", methods=['POST'])
-def callback(): # 改回完整的 callback，但內部訊息處理先簡化
-    app.logger.info("階段三測試：Webhook callback '/callback' 收到 POST 請求。")
-    if not line_sdk_initialized_successfully or handler is None:
-        app.logger.error("階段三測試：LINE Handler 未初始化，無法處理 callback。")
+def callback():
+    app.logger.info("階段四測試：Webhook callback '/callback' 收到 POST 請求。")
+    
+    if not line_sdk_objects_initialized_successfully or handler_obj is None:
+        app.logger.error("階段四測試：LINE Handler 物件未初始化，無法處理 callback。")
         abort(500)
 
-    signature = request.headers.get('X-Line-Signature', '') # 提供預設值以防 headers 中不存在
-    body = request.get_data(as_text=True)
-    app.logger.debug(f"階段三測試：Callback body: {body[:200]}...")
+    # signature = request.headers.get('X-Line-Signature', '')
+    # body = request.get_data(as_text=True)
+    # app.logger.debug(f"階段四測試：Callback body: {body[:200]}...")
 
-    try:
-        # 這裡暫時不呼叫 handler.handle(body, signature)
-        # 也暫時不呼叫實際的訊息處理邏輯
-        # 我們主要測試到這裡，LINE SDK 的 handler 物件是否能被正確建立且 Flask app 仍然正常
-        app.logger.info("階段三測試：handler.handle() 暫時被跳過。僅測試 LINE SDK 初始化。")
-        # 如果要更進一步，可以嘗試一個非常簡單的 handler.handle，但不觸發複雜的 meme_logic
-        # 例如，你可以定義一個空的 @handler.add(MessageEvent, message=TextMessageContent)
-        # def minimal_message_handler(event):
-        #     app.logger.info("Minimal message handler triggered.")
-        # handler.handle(body, signature) # 如果你加入了 minimal_message_handler
-        
-    except InvalidSignatureError:
-        app.logger.error("階段三測試：簽名驗證失敗。")
-        abort(400)
-    except Exception as e:
-        app.logger.error(f"階段三測試：處理 Webhook 時發生未預期錯誤 (可能在 handle 之前): {e}", exc_info=True)
-        abort(500)
-    return 'OK_CALLBACK_STAGE3', 200
-
-
-# --- 新增一個極簡的 handler 裝飾器函式 (可選，用於更細緻的測試) ---
-# 如果上面的 callback 中 handler.handle() 被註解掉，這個就不會被觸發
-# 如果 callback 中的 handler.handle() 被啟用，這個會被觸發（如果事件匹配）
-if handler: # 確保 handler 不是 None
-    @handler.add(MessageEvent, message=TextMessageContent)
-    def handle_minimal_text_message(event):
-        app.logger.info(f"階段三測試：Minimal text message handler 收到訊息: {event.message.text}")
-        # 在這個階段，我們不回覆 LINE，只是記錄日誌
-        # 如果要回覆，需要 ApiClient 等
-else:
-    app.logger.warning("階段三測試：由於 handler 未初始化，無法新增訊息處理器。")
-# --- 結束新增 ---
-
-# (本地開發用的 if __name__ == "__main__": 部分可以保留或註解掉)
+    # 在這個階段，我們完全不呼叫 handler_obj.handle()
+    # 也不註冊任何 @handler_obj.add 裝飾器
+    app.logger.info("階段四測試：handler_obj.handle() 和事件處理器被完全跳過。")
+    
+    return 'OK_CALLBACK_STAGE4', 200
 # # line_bot.py
 # import os
 # import logging
