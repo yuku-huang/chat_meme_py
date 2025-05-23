@@ -10,7 +10,7 @@ INDEX_FILE = 'faiss_index.index' # 要儲存的 FAISS 索引檔名
 MAPPING_FILE = 'index_to_filename.json' # 索引 ID 到檔案名稱的對應檔
 # 選擇一個嵌入模型，'paraphrase-multilingual-MiniLM-L12-v2' 是個不錯的多語言選項
 # 你也可以選擇其他支援中文的模型，例如 Hugging Face 上的 'uer/sbert-base-chinese-nli'
-EMBEDDING_MODEL_NAME = 'paraphrase-multilingual-MiniLM-L12-v2'
+EMBEDDING_MODEL_NAME = 'sentence-transformers/all-MiniLM-L6-v2'
 # --- 設定結束 ---
 
 def load_annotations(filepath):

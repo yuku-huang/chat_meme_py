@@ -13,7 +13,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ANNOTATION_FILE = os.path.join(BASE_DIR, 'meme_annotations_enriched.json')
 INDEX_FILE = os.path.join(BASE_DIR, 'faiss_index.index')
 MAPPING_FILE = os.path.join(BASE_DIR, 'index_to_filename.json')
-EMBEDDING_MODEL_NAME = 'paraphrase-multilingual-MiniLM-L12-v2' # 與建立索引時相同
+EMBEDDING_MODEL_NAME = 'sentence-transformers/all-MiniLM-L6-v2' # 與建立索引時相同
 
 # --- 初始化 Flask 應用 ---
 app = Flask(__name__)
