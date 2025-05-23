@@ -195,20 +195,20 @@ def handle_text_message(event: MessageEvent):
 
 # 為了讓 Vercel (或 Gunicorn) 能找到 app 物件，它必須在模組的頂層。
 # if __name__ == "__main__": 這部分僅用於本地開發執行。
-if __name__ == "__main__":
-    # 確保本地測試時，必要的環境變數已設定
-    # 例如： export LINE_CHANNEL_SECRET="..."
-    #       export LINE_CHANNEL_ACCESS_TOKEN="..."
-    #       export ANNOTATIONS_JSON_URL="..."
-    #       export GROQ_API_KEY_1="..."
-    #       export MEME_SEARCH_API_URL="..."
-    #       export CLOUD_MEME_BASE_URL="..."
+# if __name__ == "__main__":
+#     # 確保本地測試時，必要的環境變數已設定
+#     # 例如： export LINE_CHANNEL_SECRET="..."
+#     #       export LINE_CHANNEL_ACCESS_TOKEN="..."
+#     #       export ANNOTATIONS_JSON_URL="..."
+#     #       export GROQ_API_KEY_1="..."
+#     #       export MEME_SEARCH_API_URL="..."
+#     #       export CLOUD_MEME_BASE_URL="..."
     
-    app.logger.info("應用程式以本地開發模式啟動。")
-    if not resources_loaded:
-        app.logger.warning("警告：資源未完全載入，本地測試功能可能受限。")
-    if not handler or not configuration:
-        app.logger.warning("警告：LINE Bot 未完全配置，本地測試功能可能受限。")
+#     app.logger.info("應用程式以本地開發模式啟動。")
+#     if not resources_loaded:
+#         app.logger.warning("警告：資源未完全載入，本地測試功能可能受限。")
+#     if not handler or not configuration:
+#         app.logger.warning("警告：LINE Bot 未完全配置，本地測試功能可能受限。")
 
-    port = int(os.environ.get("PORT", 5001))
-    app.run(host="0.0.0.0", port=port, debug=True) # 本地開發時 debug=True
+#     port = int(os.environ.get("PORT", 5001))
+#     app.run(host="0.0.0.0", port=port, debug=True) # 本地開發時 debug=True
