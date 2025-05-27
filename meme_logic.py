@@ -76,7 +76,7 @@ class APIKeyManager:
 api_key_manager = APIKeyManager()
 
 # --- 基本設定 ---
-GROQ_MODEL_NAME = os.environ.get("GROQ_MODEL_FOR_BOT", "llama3-8b-8192")
+GROQ_MODEL_NAME = os.environ.get("GROQ_MODEL_FOR_BOT", "meta-llama/llama-4-scout-17b-16e-instruct")
 ANNOTATIONS_JSON_URL = os.environ.get('ANNOTATIONS_JSON_URL') # 強制從環境變數讀取
 MEME_SEARCH_API_URL = os.environ.get('MEME_SEARCH_API_URL')
 MEME_DETAILS_API_URL = os.environ.get('MEME_DETAILS_API_URL')
