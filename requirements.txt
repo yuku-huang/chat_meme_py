@@ -7,10 +7,18 @@ Flask
 groq
 
 # 向量與機器學習相關
+# Specify CPU-only PyTorch to reduce slug size for Vercel
+# Note: torchvision and torchaudio are often not strictly needed for sentence-transformers
+# and are omitted here to save space.
+torch --index-url https://download.pytorch.org/whl/cpu
+# sentence-transformers will pull 'transformers'. Listing it explicitly is for clarity or version control if needed.
+transformers
 sentence-transformers
-faiss-cpu # CPU 版本的 FAISS，如果你的環境有支援 CUDA 的 GPU，可以考慮 faiss-gpu
+
+faiss-cpu # CPU 版本的 FAISS
 numpy
-# Pillow # 用於圖片處理，例如在 meme_logic.py 中測試時顯示圖片
+
+# Pillow # 用於圖片處理，例如在 meme_logic.py 中測試時顯示圖片 # This can likely be removed if only for local testing and not used in Vercel deployment
 
 # 環境變數管理 (可選，但推薦)
 python-dotenv
