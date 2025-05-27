@@ -7,6 +7,7 @@ import time
 import random
 from typing import Dict, Optional, List
 import requests # 確保 requests 已在 requirements.txt
+from sentence_transformers import SentenceTransformer # ADD THIS LINE
 
 # --- 初始化 Logger ---
 logger = logging.getLogger(__name__)
@@ -92,6 +93,8 @@ MIN_HUMOR_FIT_SCORE_FOR_ACCEPTANCE = 3
 all_meme_annotations_cache = None
 groq_clients_cache: Dict[str, 'Groq'] = {}
 Groq = None # Groq SDK 的型別提示
+embedding_model_for_search_cache = None # ADD THIS LINE
+SEARCH_EMBEDDING_MODEL_NAME = 'paraphrase-multilingual-MiniLM-L12-v2' # ADD THIS LINE
 
 def ensure_groq_imported_and_configured():
     global Groq
@@ -134,6 +137,21 @@ def get_groq_client(task_type: str = 'default') -> Optional['Groq']:
     except Exception as e:
         logger.error(f"初始化 Groq Client 時發生錯誤 (任務 '{task_type}'): {e}", exc_info=True)
         return None
+
+def ensure_embedding_model_loaded():
+    """確保用於搜尋的 SentenceTransformer 模型已載入。"""
+    global embedding_model_for_search_cache
+    if embedding_model_for_search_cache is None:
+        try:
+            logger.info(f"正在為搜尋服務客戶端載入嵌入模型: {SEARCH_EMBEDDING_MODEL_NAME}...")
+            embedding_model_for_search_cache = SentenceTransformer(SEARCH_EMBEDDING_MODEL_NAME)
+            logger.info("搜尋服務客戶端的嵌入模型載入完成。")
+            return True
+        except Exception as e:
+            logger.error(f"載入搜尋服務客戶端的嵌入模型 {SEARCH_EMBEDDING_MODEL_NAME} 時發生錯誤: {e}", exc_info=True)
+            embedding_model_for_search_cache = None # 確保出錯時快取是 None
+            return False
+    return True
 
 def load_all_resources():
     global all_meme_annotations_cache
@@ -399,8 +417,21 @@ def search_memes_via_api(query_text: str, k: int = NUM_MEMES_PER_REPLY_SEARCH) -
         logger.error("重大錯誤：MEME_SEARCH_API_URL 環境變數未設定。無法執行外部梗圖搜尋。")
         return []
 
-    payload = {"query_text": query_text, "k": k}
-    logger.info(f"正在呼叫外部梗圖搜尋 API: {MEME_SEARCH_API_URL}，查詢: {query_text[:50]}..., k={k}")
+    # NEW: Ensure embedding model is loaded and encode query_text
+    if not ensure_embedding_model_loaded() or embedding_model_for_search_cache is None:
+        logger.error("搜尋嵌入模型未載入，無法執行梗圖搜尋。")
+        return []
+    
+    try:
+        query_vector_np = embedding_model_for_search_cache.encode([query_text], convert_to_numpy=True)
+        query_vector_list = query_vector_np[0].tolist() # Convert to list of floats
+    except Exception as e:
+        logger.error(f"使用文字 '{query_text[:50]}...' 生成查詢向量時發生錯誤: {e}", exc_info=True)
+        return []
+
+    # payload = {"query_text": query_text, "k": k} # OLD PAYLOAD
+    payload = {"query_vector": query_vector_list, "k": k} # NEW PAYLOAD
+    logger.info(f"正在呼叫外部梗圖搜尋 API: {MEME_SEARCH_API_URL}，查詢向量長度: {len(query_vector_list)}, k={k}") # UPDATED LOG
 
     try:
         response = requests.post(MEME_SEARCH_API_URL, json=payload, timeout=15) # 增加超時
