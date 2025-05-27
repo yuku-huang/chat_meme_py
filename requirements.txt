@@ -15,10 +15,10 @@ torch --index-url https://download.pytorch.org/whl/cpu
 transformers
 sentence-transformers
 
-faiss-cpu # CPU 版本的 FAISS
+# faiss-cpu # CPU 版本的 FAISS # REMOVED - Not needed by Vercel (meme_logic.py), only by Render (search_service.py)
 numpy
 
-# Pillow # 用於圖片處理，例如在 meme_logic.py 中測試時顯示圖片 # This can likely be removed if only for local testing and not used in Vercel deployment
+# Pillow # REMOVED - Comment indicates it is for local testing
 
 # 環境變數管理 (可選，但推薦)
 python-dotenv
