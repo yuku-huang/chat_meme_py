@@ -1,0 +1,10 @@
+# Packages for the search service running on Render
+Flask
+gunicorn
+numpy
+faiss-cpu
+sentence-transformers
+# sentence-transformers requires torch and transformers
+torch --index-url https://download.pytorch.org/whl/cpu
+transformers
+requests 

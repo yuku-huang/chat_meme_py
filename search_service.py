@@ -13,6 +13,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ANNOTATION_FILE = os.path.join(BASE_DIR, 'meme_annotations_enriched.json')
 INDEX_FILE = os.path.join(BASE_DIR, 'faiss_index.index')
 MAPPING_FILE = os.path.join(BASE_DIR, 'index_to_filename.json')
+EMBEDDING_MODEL_NAME = 'paraphrase-multilingual-MiniLM-L12-v2' # 新增模型名稱
 
 # --- 初始化 Flask 應用 ---
 app = Flask(__name__)
@@ -26,12 +27,13 @@ logger = logging.getLogger(__name__)
 faiss_index_cache = None
 index_to_filename_map_cache = None
 all_meme_annotations_cache = None
+embedding_model_cache = None # 新增嵌入模型的快取
 
 def load_all_search_resources():
     """在應用程式啟動時載入所有必要的搜尋資源。"""
-    global faiss_index_cache, index_to_filename_map_cache, all_meme_annotations_cache
+    global faiss_index_cache, index_to_filename_map_cache, all_meme_annotations_cache, embedding_model_cache
     
-    if faiss_index_cache and index_to_filename_map_cache and all_meme_annotations_cache:
+    if faiss_index_cache and index_to_filename_map_cache and all_meme_annotations_cache and embedding_model_cache:
         logger.info("所有搜尋資源已從快取載入。")
         return True
 
@@ -60,6 +62,10 @@ def load_all_search_resources():
         with open(ANNOTATION_FILE, 'r', encoding='utf-8') as f:
             all_meme_annotations_cache = json.load(f)
         logger.info(f"成功從 {ANNOTATION_FILE} 載入 {len(all_meme_annotations_cache)} 筆完整標註。")
+
+        logger.info(f"正在載入嵌入模型: {EMBEDDING_MODEL_NAME}...")
+        embedding_model_cache = SentenceTransformer(EMBEDDING_MODEL_NAME)
+        logger.info("嵌入模型載入完成。")
         
         logger.info("--- 搜尋服務資源載入完成 ---")
         return True
@@ -107,24 +113,26 @@ def search_memes_api():
     if not data:
         return jsonify({"error": "Request body must be JSON."}), 400
 
-    query_vector_list = data.get("query_vector")
+    query_text = data.get("query_text")
     k = data.get("k", 3) # 預設回傳 3 個
 
-    if not query_vector_list:
-        return jsonify({"error": "Missing 'query_vector' in request body."}), 400
-    if not isinstance(query_vector_list, list) or not all(isinstance(x, (int, float)) for x in query_vector_list):
-        return jsonify({"error": "'query_vector' must be a list of numbers."}), 400
+    if not query_text:
+        return jsonify({"error": "Missing 'query_text' in request body."}), 400
+    if not isinstance(query_text, str):
+        return jsonify({"error": "'query_text' must be a string."}), 400
     if not isinstance(k, int) or k <= 0:
         return jsonify({"error": "'k' must be a positive integer."}), 400
 
-    logger.info(f"收到搜尋請求: query_vector_len={len(query_vector_list)}, k={k}")
+    logger.info(f"收到搜尋請求: query_text='{query_text[:50]}...', k={k}")
 
     try:
-        if faiss_index_cache is None or index_to_filename_map_cache is None:
+        if faiss_index_cache is None or index_to_filename_map_cache is None or embedding_model_cache is None:
             logger.error("搜尋資源未正確初始化。")
             return jsonify({"error": "Search resources not initialized."}), 500
 
-        query_np_vector = np.array([query_vector_list], dtype='float32')
+        logger.info("正在為查詢文字生成嵌入向量...")
+        query_np_vector = embedding_model_cache.encode([query_text], convert_to_numpy=True).astype('float32')
+        logger.info("查詢向量生成完畢。")
         
         distances, indices = faiss_index_cache.search(query_np_vector, k)
         
