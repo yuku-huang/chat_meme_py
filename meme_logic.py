@@ -403,7 +403,7 @@ def search_memes_via_api(query_text: str, k: int = NUM_MEMES_PER_REPLY_SEARCH) -
     logger.info(f"正在呼叫外部梗圖搜尋 API: {MEME_SEARCH_API_URL}，查詢文字: {query_text[:50]}..., k={k}")
 
     try:
-        response = requests.post(MEME_SEARCH_API_URL, json=payload, timeout=15)
+        response = requests.post(MEME_SEARCH_API_URL, json=payload, timeout=45) # 增加超時時間到 45 秒
         response.raise_for_status()  
         api_results = response.json() 
         
